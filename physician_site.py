@@ -64,6 +64,9 @@ def allocate_patients(
     n_step_down_patients: int = 0,
     maximum_patients: int = 1000
 ):
+    # Store initial patient counts for even distribution later
+    initial_counts = {p.name: p.total_patients for p in physicians}
+    
     # Make team lists
     team_A = [p for p in physicians if p.team == 'A']
     team_B = [p for p in physicians if p.team == 'B']
@@ -77,14 +80,19 @@ def allocate_patients(
     def can_take_patient(physician):
         return physician.total_patients < maximum_patients
     
+    # Store initial stepdown counts for gained calculation
+    initial_stepdown_counts = {p.name: p.step_down_patients for p in physicians}
+    
     # Helper function to check if physician can take a step down patient
+    # Only limit the gained stepdown to 1, not the total stepdown
     def can_take_step_down(physician):
-        return physician.step_down_patients < 1 and can_take_patient(physician)
+        gained_stepdown = physician.step_down_patients - initial_stepdown_counts.get(physician.name, 0)
+        return gained_stepdown < 1 and can_take_patient(physician)
     
     # First, allocate step down patients: Team B first, then Team A
-    # Each physician can have at most 1 step down patient
+    # Only limit gained stepdown to 1, total stepdown can be greater
     while n_step_down_patients > 0:
-        # Find Team B physicians who can take a step down patient (have 0 step down patients)
+        # Find Team B physicians who can take a step down patient (gained stepdown < 1)
         available_B = [p for p in team_B if can_take_step_down(p)]
         if available_B:
             # Allocate to Team B physician with lowest total patient count
@@ -92,7 +100,7 @@ def allocate_patients(
             min_physician.add_patient(is_step_down=True)
             n_step_down_patients -= 1
         else:
-            # All Team B physicians already have 1 step down patient, allocate to Team A
+            # All Team B physicians already have gained 1 step down patient, allocate to Team A
             available_A = [p for p in team_A if can_take_step_down(p)]
             if available_A:
                 # Allocate to Team A physician with lowest total patient count
@@ -100,7 +108,7 @@ def allocate_patients(
                 min_physician.add_patient(is_step_down=True)
                 n_step_down_patients -= 1
             else:
-                # Both teams are full (all physicians have 1 step down patient)
+                # Both teams are full (all physicians have gained 1 step down patient)
                 break
     
     # Second, fix physicians who are more than 1 less than the minimum value
@@ -164,60 +172,122 @@ def allocate_patients(
                 else:
                     break
 
-    # Fourth, distribute remaining A patients to Team A physicians (if any)
-    while n_A_new_patients > 0:
-        available_A = [p for p in team_A if can_take_patient(p)]
-        if available_A:
-            min_physician = min(available_A, key=lambda x: x.total_patients)
-            min_physician.add_patient()
-            n_A_new_patients -= 1
-            n_total_new_patients -= 1
-        else:
-            # Team A is full, use Team B buffer if available
-            if buffer_B:
-                available_buffer_B = [p for p in buffer_B if can_take_patient(p)]
-                if available_buffer_B:
-                    min_physician = min(available_buffer_B, key=lambda x: x.total_patients)
-                    min_physician.add_patient()
-                    n_A_new_patients -= 1
-                    n_total_new_patients -= 1
+    # Fourth, distribute remaining patients evenly
+    # Goal: All non-new physicians should get 1 or 2 patients gained
+    # Physicians with step down patients should get 1, others should get 2 (if possible)
+    
+    # Get all non-new physicians for even distribution
+    non_new_physicians = [p for p in physicians if not p.is_new]
+    
+    # Combine all remaining patients into a pool for even distribution
+    # We'll distribute by team, but ensure even gains
+    remaining_patients = n_A_new_patients + n_B_new_patients + n_N_new_patients
+    
+    if remaining_patients > 0 and non_new_physicians:
+        # Calculate target gains: physicians with step down get 1, others get 2
+        # But we need to work within available patients
+        physicians_with_stepdown = [p for p in non_new_physicians if p.step_down_patients > 0]
+        physicians_without_stepdown = [p for p in non_new_physicians if p.step_down_patients == 0]
+        
+        # Calculate how many patients we need to give each group
+        # First, give 1 to physicians with step down
+        # Then, give 2 to physicians without step down (if possible)
+        # If not enough, give 1 to some without step down
+        
+        # Calculate current gains so far
+        current_gains = {p.name: p.total_patients - initial_counts[p.name] for p in non_new_physicians}
+        
+        # Distribute Team A patients
+        # Ensure all Team A patients are distributed
+        team_A_non_new = [p for p in team_A if not p.is_new and can_take_patient(p)]
+        while n_A_new_patients > 0:
+            # Prioritize physicians without step down for 2 patients
+            # But ensure all get at least 1, and difference is at most 1
+            available = [p for p in team_A_non_new if can_take_patient(p)]
+            if not available:
+                # Team A full, try buffer
+                if buffer_B:
+                    available = [p for p in buffer_B if can_take_patient(p)]
+                    if available:
+                        min_physician = min(available, key=lambda x: (x.step_down_patients > 0, current_gains.get(x.name, 0)))
+                        min_physician.add_patient()
+                        n_A_new_patients -= 1
+                        n_total_new_patients -= 1
+                        current_gains[min_physician.name] = current_gains.get(min_physician.name, 0) + 1
+                    else:
+                        break
                 else:
                     break
             else:
-                break
-
-    # Fifth, distribute remaining B patients to Team B physicians (if any)
-    while n_B_new_patients > 0:
-        available_B = [p for p in team_B if can_take_patient(p)]
-        if available_B:
-            min_physician = min(available_B, key=lambda x: x.total_patients)
-            min_physician.add_patient()
-            n_B_new_patients -= 1
-            n_total_new_patients -= 1
-        else:
-            # Team B is full, use Team A buffer if available
-            if buffer_A:
-                available_buffer_A = [p for p in buffer_A if can_take_patient(p)]
-                if available_buffer_A:
-                    min_physician = min(available_buffer_A, key=lambda x: x.total_patients)
-                    min_physician.add_patient()
-                    n_B_new_patients -= 1
-                    n_total_new_patients -= 1
+                # Find physician with lowest gain
+                # Prioritize those who haven't reached their target, but continue distributing if needed
+                min_physician = min(available, key=lambda x: (
+                    current_gains.get(x.name, 0),  # Lowest gain first
+                    1 if x.step_down_patients > 0 else 0  # Prefer those without step down (they need 2)
+                ))
+                
+                # Always allocate if there are patients available and physician can take them
+                # Don't stop just because they reached their target - continue to distribute all patients
+                min_physician.add_patient()
+                n_A_new_patients -= 1
+                n_total_new_patients -= 1
+                current_gains[min_physician.name] = current_gains.get(min_physician.name, 0) + 1
+        
+        # Distribute Team B patients
+        # Ensure all Team B patients are distributed
+        team_B_non_new = [p for p in team_B if not p.is_new and can_take_patient(p)]
+        while n_B_new_patients > 0:
+            available = [p for p in team_B_non_new if can_take_patient(p)]
+            if not available:
+                # Team B full, try buffer
+                if buffer_A:
+                    available = [p for p in buffer_A if can_take_patient(p)]
+                    if available:
+                        min_physician = min(available, key=lambda x: (x.step_down_patients > 0, current_gains.get(x.name, 0)))
+                        min_physician.add_patient()
+                        n_B_new_patients -= 1
+                        n_total_new_patients -= 1
+                        current_gains[min_physician.name] = current_gains.get(min_physician.name, 0) + 1
+                    else:
+                        break
                 else:
                     break
             else:
+                # Find physician with lowest gain
+                # Prioritize those who haven't reached their target, but continue distributing if needed
+                min_physician = min(available, key=lambda x: (
+                    current_gains.get(x.name, 0),  # Lowest gain first
+                    1 if x.step_down_patients > 0 else 0  # Prefer those without step down (they need 2)
+                ))
+                
+                # Always allocate if there are patients available and physician can take them
+                # Don't stop just because they reached their target - continue to distribute all patients
+                min_physician.add_patient()
+                n_B_new_patients -= 1
+                n_total_new_patients -= 1
+                current_gains[min_physician.name] = current_gains.get(min_physician.name, 0) + 1
+        
+        # Distribute Team N patients
+        # Ensure all Team N patients are distributed
+        team_N_non_new = [p for p in team_N if not p.is_new and can_take_patient(p)]
+        while n_N_new_patients > 0:
+            available = [p for p in team_N_non_new if can_take_patient(p)]
+            if available:
+                # Find physician with lowest gain
+                # Prioritize those who haven't reached their target, but continue distributing if needed
+                min_physician = min(available, key=lambda x: (
+                    current_gains.get(x.name, 0),  # Lowest gain first
+                    1 if x.step_down_patients > 0 else 0  # Prefer those without step down (they need 2)
+                ))
+                
+                # Always allocate if there are patients available and physician can take them
+                # Don't stop just because they reached their target - continue to distribute all patients
+                min_physician.add_patient()
+                n_N_new_patients -= 1
+                n_total_new_patients -= 1
+                current_gains[min_physician.name] = current_gains.get(min_physician.name, 0) + 1
+            else:
                 break
-
-    # Sixth, distribute remaining N patients to Team N physicians (if any)
-    while n_N_new_patients > 0:
-        available_N = [p for p in team_N if can_take_patient(p)]
-        if available_N:
-            min_physician = min(available_N, key=lambda x: x.total_patients)
-            min_physician.add_patient()
-            n_N_new_patients -= 1
-            n_total_new_patients -= 1
-        else:
-            break
 
 # --- Streamlit App Begins Here ---
 st.set_page_config(page_title="Patient Allocator", page_icon="🩺", layout="wide")
@@ -341,6 +411,7 @@ if run:
         int(n_step_down_patients),
         int(maximum_patients)
     )
+    
     # Prepare results
     results_df = pd.DataFrame([
         {
@@ -360,6 +431,68 @@ if run:
     ])
     st.markdown("### :clipboard: Results")
     st.dataframe(results_df, hide_index=True, use_container_width=True)
+    
+    # Calculate team totals and gained totals
+    team_a_total = sum(p.total_patients for p in physicians if p.team == 'A')
+    team_b_total = sum(p.total_patients for p in physicians if p.team == 'B')
+    team_a_gained = sum(p.total_patients - initial_counts[p.name] for p in physicians if p.team == 'A')
+    team_b_gained = sum(p.total_patients - initial_counts[p.name] for p in physicians if p.team == 'B')
+    team_a_stepdown_gained = sum(p.step_down_patients - initial_step_down_counts[p.name] for p in physicians if p.team == 'A')
+    team_b_stepdown_gained = sum(p.step_down_patients - initial_step_down_counts[p.name] for p in physicians if p.team == 'B')
+    
+    # Calculate trades from the Traded column
+    team_a_traded = sum(p.traded_patients for p in physicians if p.team == 'A')
+    team_b_traded = sum(p.traded_patients for p in physicians if p.team == 'B')
+    
+    # Trades from A to B: Team A's traded patients go to Team B
+    # Trades from B to A: Team B's traded patients go to Team A
+    trade_info = {'A_to_B': team_a_traded, 'B_to_A': team_b_traded}
+    
+    # Total Patients Gained + Traded:
+    # Team A gets: Team A's gained + Team B's traded (B's traded go to A)
+    # Team B gets: Team B's gained + Team A's traded (A's traded go to B)
+    team_a_gained_traded = team_a_gained + team_b_traded
+    team_b_gained_traded = team_b_gained + team_a_traded
+    
+    # Calculate total census and total gained
+    total_census = sum(p.total_patients for p in physicians)
+    total_gained = sum(p.total_patients - initial_counts[p.name] for p in physicians)
+    
+    # Display summary
+    st.markdown("### 📊 Allocation Summary")
+    
+    # Team-specific information
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("#### Team A")
+        st.metric("Total Patients", team_a_total)
+        st.metric("Total Patients Gained", team_a_gained)
+        st.metric("Step Down Patients Gained", team_a_stepdown_gained)
+        st.metric("Total Patients Gained + Traded", team_a_gained_traded)
+    with col2:
+        st.markdown("#### Team B")
+        st.metric("Total Patients", team_b_total)
+        st.metric("Total Patients Gained", team_b_gained)
+        st.metric("Step Down Patients Gained", team_b_stepdown_gained)
+        st.metric("Total Patients Gained + Traded", team_b_gained_traded)
+    
+    # Overall census information
+    st.markdown("---")
+    col3, col4 = st.columns(2)
+    with col3:
+        st.metric("Total Census", total_census)
+    with col4:
+        st.metric("Total Patients Gained from Yesterday", total_gained)
+    
+    # Trade information
+    st.markdown("---")
+    st.markdown("#### 🔄 Trade Summary")
+    col5, col6 = st.columns(2)
+    with col5:
+        st.metric("Patients Traded from Team A to Team B", trade_info['A_to_B'])
+    with col6:
+        st.metric("Patients Traded from Team B to Team A", trade_info['B_to_A'])
+    
     st.success("Allocation complete! Review the results above.", icon="✅")
 else:
     # Update session state only when rows are added/removed (structure change)
