@@ -1564,79 +1564,219 @@ if "allocation_results" in st.session_state and st.session_state["allocation_res
         # Display the printable summary table
         st.dataframe(print_summary_df, hide_index=True, use_container_width=True)
         
-        # Generate text summary for easy copying/printing
-        st.markdown("#### 📋 Text Summary (Copy/Print)")
+        # Generate printable HTML content
+        from datetime import datetime
+        current_date = datetime.now().strftime('%Y-%m-%d %H:%M')
+        
+        # Build HTML table rows grouped by team
+        html_rows = ""
+        for team in sorted(print_summary_df["Team"].unique()):
+            team_df = print_summary_df[print_summary_df["Team"] == team]
+            
+            # Team header row
+            html_rows += f'<tr class="team-header"><td colspan="6">Team {team}</td></tr>'
+            
+            # Individual physician rows
+            for _, row in team_df.iterrows():
+                html_rows += f'''<tr>
+                    <td>{row['Physician Name']}</td>
+                    <td>{team}</td>
+                    <td>{int(row['Starting Patients'])}</td>
+                    <td>{int(row['Total StepDown'])}</td>
+                    <td>{int(row['New StepDown'])}</td>
+                    <td>{int(row['New Patients (Total)'])}</td>
+                </tr>'''
+            
+            # Team subtotals row
+            team_total_starting = int(team_df["Starting Patients"].sum())
+            team_total_stepdown = int(team_df["Total StepDown"].sum())
+            team_new_stepdown = int(team_df["New StepDown"].sum())
+            team_new_patients = int(team_df["New Patients (Total)"].sum())
+            html_rows += f'''<tr class="subtotal">
+                <td><strong>Team {team} Total</strong></td>
+                <td></td>
+                <td><strong>{team_total_starting}</strong></td>
+                <td><strong>{team_total_stepdown}</strong></td>
+                <td><strong>{team_new_stepdown}</strong></td>
+                <td><strong>{team_new_patients}</strong></td>
+            </tr>'''
+        
+        # Overall totals
+        overall_starting = int(print_summary_df['Starting Patients'].sum())
+        overall_stepdown = int(print_summary_df['Total StepDown'].sum())
+        overall_new_stepdown = int(print_summary_df['New StepDown'].sum())
+        overall_new_patients = int(print_summary_df['New Patients (Total)'].sum())
+        
+        html_rows += f'''<tr class="grand-total">
+            <td><strong>OVERALL TOTAL ({len(print_summary_df)} physicians)</strong></td>
+            <td></td>
+            <td><strong>{overall_starting}</strong></td>
+            <td><strong>{overall_stepdown}</strong></td>
+            <td><strong>{overall_new_stepdown}</strong></td>
+            <td><strong>{overall_new_patients}</strong></td>
+        </tr>'''
+        
+        # Complete HTML document for printing
+        print_html = f'''
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Patient Allocation Summary - {current_date}</title>
+            <style>
+                body {{
+                    font-family: Arial, sans-serif;
+                    margin: 20px;
+                    font-size: 12pt;
+                }}
+                h1 {{
+                    text-align: center;
+                    color: #333;
+                    margin-bottom: 5px;
+                }}
+                .date {{
+                    text-align: center;
+                    color: #666;
+                    margin-bottom: 20px;
+                }}
+                table {{
+                    width: 100%;
+                    border-collapse: collapse;
+                    margin-top: 10px;
+                }}
+                th, td {{
+                    border: 1px solid #333;
+                    padding: 8px 12px;
+                    text-align: left;
+                }}
+                th {{
+                    background-color: #4a90d9;
+                    color: white;
+                    font-weight: bold;
+                }}
+                tr:nth-child(even) {{
+                    background-color: #f9f9f9;
+                }}
+                .team-header {{
+                    background-color: #e8f4fd;
+                    font-weight: bold;
+                }}
+                .team-header td {{
+                    font-size: 14pt;
+                    padding: 10px;
+                }}
+                .subtotal {{
+                    background-color: #fff3cd;
+                }}
+                .grand-total {{
+                    background-color: #d4edda;
+                    font-size: 13pt;
+                }}
+                @media print {{
+                    body {{
+                        margin: 0;
+                        padding: 15px;
+                    }}
+                    h1 {{
+                        font-size: 16pt;
+                    }}
+                    table {{
+                        font-size: 10pt;
+                    }}
+                    th, td {{
+                        padding: 5px 8px;
+                    }}
+                }}
+            </style>
+        </head>
+        <body>
+            <h1>🩺 Patient Allocation Summary</h1>
+            <p class="date">{current_date}</p>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Physician Name</th>
+                        <th>Team</th>
+                        <th>Starting Patients</th>
+                        <th>Total StepDown</th>
+                        <th>New StepDown</th>
+                        <th>New Patients (Total)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {html_rows}
+                </tbody>
+            </table>
+        </body>
+        </html>
+        '''
+        
+        # Escape the HTML for JavaScript
+        import html
+        escaped_html = html.escape(print_html).replace("'", "\\'").replace("\n", "\\n")
+        
+        # Create a button that opens a new window with the printable content
+        st.markdown(f'''
+        <button onclick="openPrintWindow()" style="
+            background-color: #4CAF50;
+            border: none;
+            color: white;
+            padding: 12px 24px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 16px;
+            margin: 10px 0;
+            cursor: pointer;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        ">
+            🖨️ Open Print Preview
+        </button>
+        <script>
+        function openPrintWindow() {{
+            var printContent = '{escaped_html}';
+            var printWindow = window.open('', '_blank', 'width=800,height=600');
+            printWindow.document.write(printContent.replace(/\\\\n/g, '\\n'));
+            printWindow.document.close();
+            setTimeout(function() {{
+                printWindow.print();
+            }}, 250);
+        }}
+        </script>
+        ''', unsafe_allow_html=True)
+        
+        # Also provide a text version for copying
+        st.markdown("#### 📋 Text Version (Copy)")
         
         # Build text summary
-        from datetime import datetime
         summary_lines = []
-        summary_lines.append(f"Patient Allocation Summary - {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-        summary_lines.append("=" * 60)
-        summary_lines.append("")
+        summary_lines.append(f"Patient Allocation Summary - {current_date}")
+        summary_lines.append("=" * 70)
+        summary_lines.append(f"{'Physician':<20} {'Team':<6} {'Start':<8} {'StepDn':<8} {'NewSD':<8} {'NewPts':<8}")
+        summary_lines.append("-" * 70)
         
-        # Group by team
         for team in sorted(print_summary_df["Team"].unique()):
             team_df = print_summary_df[print_summary_df["Team"] == team]
             summary_lines.append(f"TEAM {team}")
-            summary_lines.append("-" * 40)
             
             for _, row in team_df.iterrows():
-                summary_lines.append(f"  {row['Physician Name']}:")
-                summary_lines.append(f"    Starting Patients: {int(row['Starting Patients'])}")
-                summary_lines.append(f"    Total StepDown: {int(row['Total StepDown'])}")
-                summary_lines.append(f"    New StepDown: {int(row['New StepDown'])}")
-                summary_lines.append(f"    New Patients (Total): {int(row['New Patients (Total)'])}")
-                summary_lines.append("")
+                summary_lines.append(f"  {row['Physician Name']:<18} {team:<6} {int(row['Starting Patients']):<8} {int(row['Total StepDown']):<8} {int(row['New StepDown']):<8} {int(row['New Patients (Total)']):<8}")
             
             # Team subtotals
             team_total_starting = int(team_df["Starting Patients"].sum())
             team_total_stepdown = int(team_df["Total StepDown"].sum())
             team_new_stepdown = int(team_df["New StepDown"].sum())
             team_new_patients = int(team_df["New Patients (Total)"].sum())
-            summary_lines.append(f"  Team {team} Totals:")
-            summary_lines.append(f"    Total Starting: {team_total_starting}")
-            summary_lines.append(f"    Total New StepDown: {team_new_stepdown}")
-            summary_lines.append(f"    Total New Patients: {team_new_patients}")
+            summary_lines.append(f"  {'Team ' + team + ' Total:':<18} {'':<6} {team_total_starting:<8} {team_total_stepdown:<8} {team_new_stepdown:<8} {team_new_patients:<8}")
             summary_lines.append("")
         
-        # Overall totals
-        summary_lines.append("=" * 60)
-        summary_lines.append("OVERALL TOTALS")
-        summary_lines.append(f"  Total Physicians: {len(print_summary_df)}")
-        summary_lines.append(f"  Total Starting Patients: {int(print_summary_df['Starting Patients'].sum())}")
-        summary_lines.append(f"  Total New StepDown: {int(print_summary_df['New StepDown'].sum())}")
-        summary_lines.append(f"  Total New Patients: {int(print_summary_df['New Patients (Total)'].sum())}")
-        summary_lines.append("=" * 60)
+        summary_lines.append("=" * 70)
+        summary_lines.append(f"{'OVERALL TOTAL:':<26} {overall_starting:<8} {overall_stepdown:<8} {overall_new_stepdown:<8} {overall_new_patients:<8}")
+        summary_lines.append(f"Total Physicians: {len(print_summary_df)}")
+        summary_lines.append("=" * 70)
         
         summary_text = "\n".join(summary_lines)
-        
-        # Display in a text area for easy copying
-        st.text_area("Summary Text", value=summary_text, height=400, key="print_summary_text")
-        
-        # Add print button with JavaScript
-        st.markdown("""
-        <style>
-        @media print {
-            .stApp header, .stSidebar, .stButton, .stCheckbox, .stTextArea, 
-            [data-testid="stHeader"], [data-testid="stSidebar"], 
-            button, .element-container:has(button) {
-                display: none !important;
-            }
-            .print-summary {
-                font-family: monospace;
-                white-space: pre-wrap;
-                font-size: 12pt;
-            }
-        }
-        </style>
-        """, unsafe_allow_html=True)
-        
-        if st.button("🖨️ Print Summary", key="print_button"):
-            st.markdown(f"""
-            <script>
-            window.print();
-            </script>
-            """, unsafe_allow_html=True)
+        st.code(summary_text, language=None)
         
 # Handle structure changes and show info when no results exist  
 if "allocation_results" not in st.session_state or st.session_state["allocation_results"] is None:
