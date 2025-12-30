@@ -1516,6 +1516,15 @@ if "allocation_results" in st.session_state and st.session_state["allocation_res
             st.metric("Step Down Patients Gained", summary["team_b_stepdown_gained"])
             st.metric("Total Patients Gained + Traded", team_b_gained_traded)
         
+        # Trade information
+        st.markdown("---")
+        st.markdown("#### 🔄 Trade Summary")
+        col5, col6 = st.columns(2)
+        with col5:
+            st.metric("Patients Traded from Team A to Team B", trade_info['A_to_B'])
+        with col6:
+            st.metric("Patients Traded from Team B to Team A", trade_info['B_to_A'])
+            
         # Overall census information
         st.markdown("---")
         col3, col4 = st.columns(2)
@@ -1530,14 +1539,6 @@ if "allocation_results" in st.session_state and st.session_state["allocation_res
             st.caption(f"Team A Gained ({summary['team_a_gained']}) + Team B Gained ({summary['team_b_gained']}) + "
                       f"Team N Gained ({summary.get('team_n_gained', 0)}) + Total Traded ({summary.get('total_traded', 0)}) = {summary['total_gained']}")
         
-        # Trade information
-        st.markdown("---")
-        st.markdown("#### 🔄 Trade Summary")
-        col5, col6 = st.columns(2)
-        with col5:
-            st.metric("Patients Traded from Team A to Team B", trade_info['A_to_B'])
-        with col6:
-            st.metric("Patients Traded from Team B to Team A", trade_info['B_to_A'])
 
         # Printable Summary Section
     st.markdown("---")
