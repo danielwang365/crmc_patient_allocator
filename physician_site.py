@@ -1309,7 +1309,16 @@ if "allocation_results" in st.session_state and st.session_state["allocation_res
             na_position='last'
         ).reset_index(drop=True)
     
-    st.dataframe(display_df, hide_index=True, use_container_width=True)
+    # Style the DataFrame to highlight and bold "Gained StepDown" and "Gained + Traded" columns
+    def highlight_columns(series):
+        """Highlight and bold specific columns"""
+        if series.name in ["Gained StepDown", "Gained + Traded"]:
+            return ['background-color: #fff3cd; font-weight: bold'] * len(series)
+        return [''] * len(series)
+    
+    # Apply styling
+    styled_df = display_df.style.apply(highlight_columns, axis=0)
+    st.dataframe(styled_df, hide_index=True, use_container_width=True)
     
     # Calculate and display total gained patients and distribution
     if "allocation_results" in st.session_state and st.session_state["allocation_results"] is not None:
