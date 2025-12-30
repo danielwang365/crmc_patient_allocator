@@ -277,16 +277,16 @@ def allocate_patients(
         # Find Team B physicians who can take a step down patient (gained stepdown < 1)
         available_B = [p for p in team_B if can_take_step_down(p)]
         if available_B:
-            # Allocate to Team B physician with lowest total patient count
-            min_physician = min(available_B, key=lambda x: x.total_patients)
+            # Allocate to Team B physician with lowest step down count
+            min_physician = min(available_B, key=lambda x: x.step_down_patients)
             min_physician.add_patient(is_step_down=True)
             n_step_down_patients -= 1
         else:
             # All Team B physicians already have gained 1 step down patient, allocate to Team A
             available_A = [p for p in team_A if can_take_step_down(p)]
             if available_A:
-                # Allocate to Team A physician with lowest total patient count
-                min_physician = min(available_A, key=lambda x: x.total_patients)
+                # Allocate to Team A physician with lowest step down count
+                min_physician = min(available_A, key=lambda x: x.step_down_patients)
                 min_physician.add_patient(is_step_down=True)
                 n_step_down_patients -= 1
             else:
