@@ -267,64 +267,95 @@ def allocate_patients(
     
     # Helper function to check if physician can take a step down patient
     # Only limit the gained stepdown to 1, not the total stepdown
+    # DO NOT check total patient count - only check if they've already gained a step-down
     def can_take_step_down(physician):
-        gained_stepdown = physician.step_down_patients - initial_stepdown_counts.get(physician.name, 0)
-        return gained_stepdown < 1 and can_take_patient(physician)
+        initial_sd = initial_stepdown_counts.get(physician.name, 0)
+        gained_stepdown = physician.step_down_patients - initial_sd
+        # Only check if they've already gained a step-down (gained_stepdown < 1)
+        # DO NOT check total patients for step-down allocation
+        return gained_stepdown < 1
     
     # First, allocate step down patients: Team B first, then Team A
-    # Algorithm:
-    # 1. Get all Team B physicians
-    # 2. Get their initial StepDown counts
-    # 3. Sort by StepDown count (lowest to highest)
-    # 4. Distribute step-down patients one at a time, starting from the lowest StepDown count
+    # Simple algorithm:
+    # 1. Get all Team B physicians (working only)
+    # 2. Sort by INITIAL StepDown count (lowest to highest) - use initial_stepdown_counts
+    # 3. Assign one step-down patient to each in sorted order
+    # DO NOT consider total patient count for step-down allocation
     
-    # Filter to only working physicians and those who can take patients
-    working_team_B = [p for p in team_B if p.is_working and can_take_patient(p)]
-    working_team_A = [p for p in team_A if p.is_working and can_take_patient(p)]
+    # Filter to only working physicians (do NOT filter by can_take_patient for step-down)
+    working_team_B = [p for p in team_B if p.is_working]
+    working_team_A = [p for p in team_A if p.is_working]
     
-    # Get initial StepDown count for each Team B physician
-    # Sort by initial StepDown count (lowest to highest), then by name for deterministic ordering
-    team_B_with_stepdown = []
-    for p in working_team_B:
-        # Use the stored initial value from the dictionary (should always exist)
-        initial_stepdown = initial_stepdown_counts[p.name]
-        team_B_with_stepdown.append((initial_stepdown, p.name, p))
+    # DEBUG: Show initial stepdown counts
+    print(f"\n=== STEP-DOWN ALLOCATION TRACE ===")
+    print(f"Step 1: Captured initial_stepdown_counts:")
+    for name, count in sorted(initial_stepdown_counts.items()):
+        if any(p.name == name and p.team == 'B' for p in working_team_B):
+            print(f"  {name}: {count}")
     
-    # Sort by initial StepDown count (lowest first), then by name
-    team_B_with_stepdown.sort(key=lambda x: (x[0], x[1]))
+    print(f"\nStep 2: Team B working physicians: {[p.name for p in working_team_B]}")
     
+    # Sort Team B physicians by INITIAL StepDown count (lowest to highest)
+    # Use initial_stepdown_counts to get the original value before any allocation
+    team_B_sorted = sorted(working_team_B, key=lambda x: initial_stepdown_counts.get(x.name, x.step_down_patients))
+    
+    print(f"\nStep 3: Team B sorted by INITIAL StepDown (lowest to highest):")
+    for p in team_B_sorted:
+        initial_sd = initial_stepdown_counts.get(p.name, p.step_down_patients)
+        current_sd = p.step_down_patients
+        print(f"  {p.name}: initial={initial_sd}, current={current_sd}")
+    
+    print(f"\nStep 4: Distributing {n_step_down_patients} step-down patients...")
     # Distribute step-down patients to Team B physicians in sorted order
-    # Process from lowest initial StepDown count to highest
-    for initial_stepdown, name, physician in team_B_with_stepdown:
+    for physician in team_B_sorted:
         if n_step_down_patients <= 0:
+            print(f"  Pool exhausted. Remaining: {n_step_down_patients}")
             break
-        # Only give if they can take a step-down (haven't already gained one)
-        if can_take_step_down(physician):
+        # Only give if they haven't already gained a step-down (check gained, not total)
+        initial_sd = initial_stepdown_counts.get(physician.name, 0)
+        current_sd = physician.step_down_patients
+        gained = current_sd - initial_sd
+        can_take = can_take_step_down(physician)
+        print(f"  Processing {physician.name}: initial={initial_sd}, current={current_sd}, gained={gained}, can_take={can_take}, pool={n_step_down_patients}")
+        if can_take:
             physician.add_patient(is_step_down=True)
             n_step_down_patients -= 1
+            print(f"    ✓ GAVE step-down to {physician.name}. New StepDown={physician.step_down_patients}, pool={n_step_down_patients}")
+        else:
+            print(f"    ✗ SKIPPED {physician.name} (cannot take step-down)")
     
     # If there are still step-down patients remaining, then distribute to Team A
     if n_step_down_patients > 0:
-        # Get initial StepDown count for each Team A physician
-        # Sort by initial StepDown count (lowest to highest), then by name for deterministic ordering
-        team_A_with_stepdown = []
-        for p in working_team_A:
-            # Use the stored initial value from the dictionary (should always exist)
-            initial_stepdown = initial_stepdown_counts[p.name]
-            team_A_with_stepdown.append((initial_stepdown, p.name, p))
+        print(f"\nStep 5: Remaining step-down patients: {n_step_down_patients}, distributing to Team A...")
+        # Sort Team A physicians by INITIAL StepDown count (lowest to highest)
+        # Use initial_stepdown_counts to get the original value before any allocation
+        team_A_sorted = sorted(working_team_A, key=lambda x: initial_stepdown_counts.get(x.name, x.step_down_patients))
         
-        # Sort by initial StepDown count (lowest first), then by name
-        team_A_with_stepdown.sort(key=lambda x: (x[0], x[1]))
+        print(f"Team A sorted by INITIAL StepDown (lowest to highest):")
+        for p in team_A_sorted:
+            initial_sd = initial_stepdown_counts.get(p.name, p.step_down_patients)
+            current_sd = p.step_down_patients
+            print(f"  {p.name}: initial={initial_sd}, current={current_sd}")
         
         # Distribute step-down patients to Team A physicians in sorted order
-        # Process from lowest initial StepDown count to highest
-        for initial_stepdown, name, physician in team_A_with_stepdown:
+        for physician in team_A_sorted:
             if n_step_down_patients <= 0:
+                print(f"  Pool exhausted. Remaining: {n_step_down_patients}")
                 break
-            # Only give if they can take a step-down (haven't already gained one)
-            if can_take_step_down(physician):
+            # Only give if they haven't already gained a step-down (check gained, not total)
+            initial_sd = initial_stepdown_counts.get(physician.name, 0)
+            current_sd = physician.step_down_patients
+            gained = current_sd - initial_sd
+            can_take = can_take_step_down(physician)
+            print(f"  Processing {physician.name}: initial={initial_sd}, current={current_sd}, gained={gained}, can_take={can_take}, pool={n_step_down_patients}")
+            if can_take:
                 physician.add_patient(is_step_down=True)
                 n_step_down_patients -= 1
+                print(f"    ✓ GAVE step-down to {physician.name}. New StepDown={physician.step_down_patients}, pool={n_step_down_patients}")
+            else:
+                print(f"    ✗ SKIPPED {physician.name} (cannot take step-down)")
+    
+    print(f"\n=== END STEP-DOWN ALLOCATION TRACE ===\n")
     
     # Second, fix physicians who are more than 1 less than the minimum value
     # (i.e., if minimum is 10, fix physicians with 8 or fewer patients)
@@ -1217,7 +1248,7 @@ if run:
             "Buffer": p.is_buffer,
             "Original Total Patients": initial_counts[p.name],
             "Total Patients": p.total_patients,
-            "StepDown": p.step_down_patients,
+            "Original StepDown": initial_step_down_counts[p.name],
             "Out of floor": p.transferred_patients,
             "Traded": p.traded_patients,
             "Gained": p.total_patients - initial_counts[p.name],
