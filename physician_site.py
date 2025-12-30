@@ -253,7 +253,7 @@ def allocate_patients(
     team_A = [p for p in physicians if p.team == 'A']
     team_B = [p for p in physicians if p.team == 'B']
     team_N = [p for p in physicians if p.team == 'N']
-    
+
     # Get buffer physicians
     buffer_A = [p for p in team_A if p.is_buffer]
     buffer_B = [p for p in team_B if p.is_buffer]
@@ -272,26 +272,59 @@ def allocate_patients(
         return gained_stepdown < 1 and can_take_patient(physician)
     
     # First, allocate step down patients: Team B first, then Team A
-    # Only limit gained stepdown to 1, total stepdown can be greater
-    while n_step_down_patients > 0:
-        # Find Team B physicians who can take a step down patient (gained stepdown < 1)
-        available_B = [p for p in team_B if can_take_step_down(p)]
-        if available_B:
-            # Allocate to Team B physician with lowest step down count
-            min_physician = min(available_B, key=lambda x: x.step_down_patients)
-            min_physician.add_patient(is_step_down=True)
+    # Algorithm:
+    # 1. Get all Team B physicians
+    # 2. Get their initial StepDown counts
+    # 3. Sort by StepDown count (lowest to highest)
+    # 4. Distribute step-down patients one at a time, starting from the lowest StepDown count
+    
+    # Filter to only working physicians and those who can take patients
+    working_team_B = [p for p in team_B if p.is_working and can_take_patient(p)]
+    working_team_A = [p for p in team_A if p.is_working and can_take_patient(p)]
+    
+    # Get initial StepDown count for each Team B physician
+    # Sort by initial StepDown count (lowest to highest), then by name for deterministic ordering
+    team_B_with_stepdown = []
+    for p in working_team_B:
+        # Use the stored initial value from the dictionary (should always exist)
+        initial_stepdown = initial_stepdown_counts[p.name]
+        team_B_with_stepdown.append((initial_stepdown, p.name, p))
+    
+    # Sort by initial StepDown count (lowest first), then by name
+    team_B_with_stepdown.sort(key=lambda x: (x[0], x[1]))
+    
+    # Distribute step-down patients to Team B physicians in sorted order
+    # Process from lowest initial StepDown count to highest
+    for initial_stepdown, name, physician in team_B_with_stepdown:
+        if n_step_down_patients <= 0:
+            break
+        # Only give if they can take a step-down (haven't already gained one)
+        if can_take_step_down(physician):
+            physician.add_patient(is_step_down=True)
             n_step_down_patients -= 1
-        else:
-            # All Team B physicians already have gained 1 step down patient, allocate to Team A
-            available_A = [p for p in team_A if can_take_step_down(p)]
-            if available_A:
-                # Allocate to Team A physician with lowest step down count
-                min_physician = min(available_A, key=lambda x: x.step_down_patients)
-                min_physician.add_patient(is_step_down=True)
-                n_step_down_patients -= 1
-            else:
-                # Both teams are full (all physicians have gained 1 step down patient)
+    
+    # If there are still step-down patients remaining, then distribute to Team A
+    if n_step_down_patients > 0:
+        # Get initial StepDown count for each Team A physician
+        # Sort by initial StepDown count (lowest to highest), then by name for deterministic ordering
+        team_A_with_stepdown = []
+        for p in working_team_A:
+            # Use the stored initial value from the dictionary (should always exist)
+            initial_stepdown = initial_stepdown_counts[p.name]
+            team_A_with_stepdown.append((initial_stepdown, p.name, p))
+        
+        # Sort by initial StepDown count (lowest first), then by name
+        team_A_with_stepdown.sort(key=lambda x: (x[0], x[1]))
+        
+        # Distribute step-down patients to Team A physicians in sorted order
+        # Process from lowest initial StepDown count to highest
+        for initial_stepdown, name, physician in team_A_with_stepdown:
+            if n_step_down_patients <= 0:
                 break
+            # Only give if they can take a step-down (haven't already gained one)
+            if can_take_step_down(physician):
+                physician.add_patient(is_step_down=True)
+                n_step_down_patients -= 1
     
     # Second, fix physicians who are more than 1 less than the minimum value
     # (i.e., if minimum is 10, fix physicians with 8 or fewer patients)
@@ -1287,7 +1320,7 @@ if "allocation_results" in st.session_state and st.session_state["allocation_res
         st.markdown(f"**Gain Range:** Minimum = {min_gain}, Maximum = {max_gain}, Difference = {gain_diff}")
         if gain_diff > 1:
             st.warning(f"⚠️ Gain difference is {gain_diff}, should be at most 1!")
-        else:
+    else:
             st.success("✅ All gains differ by at most 1!")
     
     # Display summary if it exists
