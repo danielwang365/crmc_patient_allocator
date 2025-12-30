@@ -7,6 +7,8 @@ DATA_FILE = "physician_data.csv"
 YESTERDAY_FILE = "yesterday_physicians.csv"
 SELECTED_FILE = "selected_physicians.csv"
 MASTER_LIST_FILE = "master_physician_list.csv"
+DEFAULT_PARAMS_FILE = "default_parameters.csv"
+DEFAULT_PHYSICIANS_FILE = "default_physicians.csv"
 
 def save_data(df):
     """Saves the physician table to a CSV file."""
@@ -80,7 +82,10 @@ def load_data(default_rows):
 
 def save_yesterday_physicians(physician_names):
     """Saves yesterday's physician names to a file."""
-    df = pd.DataFrame({"Physician Name": physician_names})
+    # Filter out NaN values and empty strings, convert to strings
+    filtered_names = [str(name).strip() for name in physician_names 
+                     if pd.notna(name) and str(name).strip()]
+    df = pd.DataFrame({"Physician Name": filtered_names})
     df.to_csv(YESTERDAY_FILE, index=False)
 
 def load_yesterday_physicians():
@@ -88,7 +93,10 @@ def load_yesterday_physicians():
     if os.path.exists(YESTERDAY_FILE):
         try:
             df = pd.read_csv(YESTERDAY_FILE)
-            return df["Physician Name"].tolist()
+            # Filter out NaN values and convert to strings, then filter out empty strings
+            names = [str(name).strip() for name in df["Physician Name"].tolist() 
+                    if pd.notna(name) and str(name).strip()]
+            return names
         except Exception:
             return []
     return []
@@ -126,6 +134,52 @@ def load_master_list(default_list):
             pass
     # Return default list if file doesn't exist or error occurred
     return sorted(list(set(default_list)))
+
+def save_default_parameters(params_dict):
+    """Saves default allocation parameters to a file."""
+    df = pd.DataFrame([params_dict])
+    df.to_csv(DEFAULT_PARAMS_FILE, index=False)
+
+def load_default_parameters():
+    """Loads default allocation parameters from a file."""
+    if os.path.exists(DEFAULT_PARAMS_FILE):
+        try:
+            df = pd.read_csv(DEFAULT_PARAMS_FILE)
+            return {
+                "n_total_new_patients": int(df.iloc[0]["n_total_new_patients"]),
+                "n_A_new_patients": int(df.iloc[0]["n_A_new_patients"]),
+                "n_B_new_patients": int(df.iloc[0]["n_B_new_patients"]),
+                "n_N_new_patients": int(df.iloc[0]["n_N_new_patients"]),
+                "n_step_down_patients": int(df.iloc[0]["n_step_down_patients"]),
+                "minimum_patients": int(df.iloc[0]["minimum_patients"]),
+                "maximum_patients": int(df.iloc[0]["maximum_patients"]),
+                "new_start_number": int(df.iloc[0]["new_start_number"]),
+            }
+        except Exception:
+            pass
+    return None
+
+def save_default_physicians(df):
+    """Saves default physician data to a file."""
+    df.to_csv(DEFAULT_PHYSICIANS_FILE, index=False)
+
+def load_default_physicians():
+    """Loads default physician data from a file."""
+    if os.path.exists(DEFAULT_PHYSICIANS_FILE):
+        try:
+            df = pd.read_csv(DEFAULT_PHYSICIANS_FILE)
+            # Ensure boolean columns are correctly typed
+            bool_cols = ["New Physician", "Buffer", "Working"]
+            for col in bool_cols:
+                if col in df.columns:
+                    df[col] = df[col].astype(bool)
+            # Handle Yesterday column
+            if "Yesterday" in df.columns:
+                df["Yesterday"] = df["Yesterday"].astype(str).replace("nan", "").replace("False", "").replace("True", "")
+            return df
+        except Exception:
+            pass
+    return None
 
 class Physician():
     def __init__(self, 
@@ -300,141 +354,342 @@ def allocate_patients(
                 else:
                     break
 
-    # Fourth, distribute remaining patients evenly
-    # Goal: All non-new physicians should get 1 or 2 patients gained
-    # Physicians with step down patients should get 1, others should get 2 (if possible)
+    # Fourth, distribute remaining patients with pattern-based allocation
+    # Team N physicians get priority from Team N Pool first
+    # Then calculate distribution pattern (e.g., for 47 patients: 5 get 3, 16 get 2)
+    # Physicians with fewer patients get higher numbers
     
-    # Get all non-new physicians for even distribution
-    non_new_physicians = [p for p in physicians if not p.is_new]
+    # Get all non-new physicians for distribution
+    non_new_physicians = [p for p in physicians if not p.is_new and can_take_patient(p)]
     
-    # Combine all remaining patients into a pool for even distribution
-    # We'll distribute by team, but ensure even gains
-    remaining_patients = n_A_new_patients + n_B_new_patients + n_N_new_patients
+    # Calculate current gains so far
+    current_gains = {p.name: p.total_patients - initial_counts[p.name] for p in non_new_physicians}
     
-    if remaining_patients > 0 and non_new_physicians:
-        # Calculate target gains: physicians with step down get 1, others get 2
-        # But we need to work within available patients
-        physicians_with_stepdown = [p for p in non_new_physicians if p.step_down_patients > 0]
-        physicians_without_stepdown = [p for p in non_new_physicians if p.step_down_patients == 0]
+    # FIRST: Allocate Team N Pool to Team N physicians (priority)
+    team_N_non_new = [p for p in team_N if not p.is_new and can_take_patient(p)]
+    if team_N_non_new and n_N_new_patients > 0:
+        # Sort Team N physicians by current patient count (lowest first)
+        team_N_sorted = sorted(team_N_non_new, key=lambda x: x.total_patients)
         
-        # Calculate how many patients we need to give each group
-        # First, give 1 to physicians with step down
-        # Then, give 2 to physicians without step down (if possible)
-        # If not enough, give 1 to some without step down
-        
-        # Calculate current gains so far
-        current_gains = {p.name: p.total_patients - initial_counts[p.name] for p in non_new_physicians}
-        
-        # Distribute Team A patients
-        # Ensure all Team A patients are distributed
-        team_A_non_new = [p for p in team_A if not p.is_new and can_take_patient(p)]
-        while n_A_new_patients > 0:
-            # Prioritize physicians without step down for 2 patients
-            # But ensure all get at least 1, and difference is at most 1
-            available = [p for p in team_A_non_new if can_take_patient(p)]
-            if not available:
-                # Team A full, try buffer
-                if buffer_B:
-                    available = [p for p in buffer_B if can_take_patient(p)]
-                    if available:
-                        min_physician = min(available, key=lambda x: (x.step_down_patients > 0, current_gains.get(x.name, 0)))
-                        min_physician.add_patient()
-                        n_A_new_patients -= 1
-                        n_total_new_patients -= 1
-                        current_gains[min_physician.name] = current_gains.get(min_physician.name, 0) + 1
-                    else:
-                        break
-                else:
-                    break
-            else:
-                # Find physician with lowest gain
-                # Prioritize those who haven't reached their target, but continue distributing if needed
-                min_physician = min(available, key=lambda x: (
-                    current_gains.get(x.name, 0),  # Lowest gain first
-                    1 if x.step_down_patients > 0 else 0  # Prefer those without step down (they need 2)
-                ))
-                
-                # Always allocate if there are patients available and physician can take them
-                # Don't stop just because they reached their target - continue to distribute all patients
-                min_physician.add_patient()
-                n_A_new_patients -= 1
-                n_total_new_patients -= 1
-                current_gains[min_physician.name] = current_gains.get(min_physician.name, 0) + 1
-        
-        # Distribute Team B patients
-        # Ensure all Team B patients are distributed
-        team_B_non_new = [p for p in team_B if not p.is_new and can_take_patient(p)]
-        while n_B_new_patients > 0:
-            available = [p for p in team_B_non_new if can_take_patient(p)]
-            if not available:
-                # Team B full, try buffer
-                if buffer_A:
-                    available = [p for p in buffer_A if can_take_patient(p)]
-                    if available:
-                        min_physician = min(available, key=lambda x: (x.step_down_patients > 0, current_gains.get(x.name, 0)))
-                        min_physician.add_patient()
-                        n_B_new_patients -= 1
-                        n_total_new_patients -= 1
-                        current_gains[min_physician.name] = current_gains.get(min_physician.name, 0) + 1
-                    else:
-                        break
-                else:
-                    break
-            else:
-                # Find physician with lowest gain
-                # Prioritize those who haven't reached their target, but continue distributing if needed
-                min_physician = min(available, key=lambda x: (
-                    current_gains.get(x.name, 0),  # Lowest gain first
-                    1 if x.step_down_patients > 0 else 0  # Prefer those without step down (they need 2)
-                ))
-                
-                # Always allocate if there are patients available and physician can take them
-                # Don't stop just because they reached their target - continue to distribute all patients
-                min_physician.add_patient()
-                n_B_new_patients -= 1
-                n_total_new_patients -= 1
-                current_gains[min_physician.name] = current_gains.get(min_physician.name, 0) + 1
-        
-        # Distribute Team N patients
-        # Ensure all Team N patients are distributed
-        team_N_non_new = [p for p in team_N if not p.is_new and can_take_patient(p)]
-        while n_N_new_patients > 0:
-            available = [p for p in team_N_non_new if can_take_patient(p)]
-            if available:
-                # Find physician with lowest gain
-                # Prioritize those who haven't reached their target, but continue distributing if needed
-                min_physician = min(available, key=lambda x: (
-                    current_gains.get(x.name, 0),  # Lowest gain first
-                    1 if x.step_down_patients > 0 else 0  # Prefer those without step down (they need 2)
-                ))
-                
-                # Always allocate if there are patients available and physician can take them
-                # Don't stop just because they reached their target - continue to distribute all patients
-                min_physician.add_patient()
+        # Distribute Team N Pool to Team N physicians
+        for physician in team_N_sorted:
+            if n_N_new_patients <= 0:
+                break
+            if can_take_patient(physician):
+                physician.add_patient()
                 n_N_new_patients -= 1
                 n_total_new_patients -= 1
-                current_gains[min_physician.name] = current_gains.get(min_physician.name, 0) + 1
+                current_gains[physician.name] = current_gains.get(physician.name, 0) + 1
+    
+    # If Team N Pool is exhausted but Team N physicians still need patients,
+    # they can get from other pools in the general distribution below
+    
+    # Recalculate current gains right before final distribution to ensure accuracy
+    # This accounts for any allocations made in earlier phases
+    current_gains = {p.name: p.total_patients - initial_counts[p.name] for p in non_new_physicians}
+    
+    # Calculate remaining patients across all pools
+    remaining_patients = n_A_new_patients + n_B_new_patients + n_N_new_patients
+    
+    # Store for verification
+    initial_remaining = remaining_patients
+    
+    if remaining_patients > 0 and non_new_physicians:
+        # New algorithm: Ensure gained patients differ by at most 1
+        # If physician number < patient number: assign +1 to all physicians
+        # If not: assign +1 to physicians with lowest patients
+        # Maximum difference in gained patients is 1
+        num_physicians = len(non_new_physicians)
+        
+        if num_physicians > 0:
+            # Sort physicians by INITIAL patient count (lowest first) - determines who gets patients first
+            sorted_physicians = sorted(non_new_physicians, key=lambda x: (
+                initial_counts.get(x.name, x.total_patients),  # Sort by INITIAL total patients (lowest first)
+                x.total_patients  # Then by current total patients as tiebreaker
+            ))
+            
+            # NEW ALGORITHM:
+            # If num_physicians > remaining_patients: Give +1 to each physician in cycles until remaining = 0
+            # If num_physicians <= remaining_patients: Give +1 to all physicians, then continue with lowest totals
+            
+            # Initialize additional gains to 0 for all
+            target_additional_gains = {p.name: 0 for p in sorted_physicians}
+            
+            patients_to_distribute = remaining_patients
+            
+            if num_physicians > remaining_patients:
+                # Fewer patients than physicians: Give +1 to each physician in cycles (round-robin)
+                # Continue until all patients are distributed
+                while patients_to_distribute > 0:
+                    # Sort by: current additional gain (lowest first), then initial total patients (lowest first)
+                    sorted_by_additional = sorted(sorted_physicians, key=lambda x: (
+                        target_additional_gains.get(x.name, 0),  # Lowest additional gain first
+                        initial_counts.get(x.name, x.total_patients),  # Then lowest initial totals
+                        x.total_patients  # Then current totals
+                    ))
+                    
+                    # Give +1 to up to 'patients_to_distribute' physicians in this cycle
+                    for physician in sorted_by_additional:
+                        if patients_to_distribute <= 0:
+                            break
+                        # Give this physician +1 additional
+                        target_additional_gains[physician.name] = target_additional_gains.get(physician.name, 0) + 1
+                        patients_to_distribute -= 1
             else:
-                break
+                # More or equal patients than physicians: Give +1 to all physicians first
+                for physician in sorted_physicians:
+                    if patients_to_distribute <= 0:
+                        break
+                    target_additional_gains[physician.name] = target_additional_gains.get(physician.name, 0) + 1
+                    patients_to_distribute -= 1
+                
+                # Then continue giving +1 to physicians with lowest totals until remaining = 0
+                while patients_to_distribute > 0:
+                    # Sort by: current additional gain (lowest first), then initial total patients (lowest first)
+                    sorted_by_additional = sorted(sorted_physicians, key=lambda x: (
+                        target_additional_gains.get(x.name, 0),  # Lowest additional gain first
+                        initial_counts.get(x.name, x.total_patients),  # Then lowest initial totals
+                        x.total_patients  # Then current totals
+                    ))
+                    
+                    # Give +1 to physicians with lowest totals
+                    for physician in sorted_by_additional:
+                        if patients_to_distribute <= 0:
+                            break
+                        # Give this physician +1 additional
+                        target_additional_gains[physician.name] = target_additional_gains.get(physician.name, 0) + 1
+                        patients_to_distribute -= 1
+            
+            # Calculate target total gains (current + additional) for allocation
+            # BUT ensure all FINAL total gains differ by at most 1
+            # Calculate based on: sum of current_gains + remaining_patients
+            total_current_gains_sum = sum(current_gains.get(p.name, 0) for p in sorted_physicians)
+            total_final_gains_needed = total_current_gains_sum + remaining_patients
+            
+            # Calculate base and remainder for final gains
+            base_final_gain = total_final_gains_needed // num_physicians
+            remainder_final = total_final_gains_needed % num_physicians
+            
+            # Assign final gains - those with lowest initial totals get the higher amount
+            target_total_gains = {}
+            for i, physician in enumerate(sorted_physicians):
+                if i < remainder_final:
+                    # First 'remainder_final' physicians (lowest INITIAL totals) get base_final_gain + 1
+                    target_total_gains[physician.name] = base_final_gain + 1
+                else:
+                    # Rest get base_final_gain
+                    target_total_gains[physician.name] = base_final_gain
+            
+            # Recalculate target_additional_gains based on normalized targets
+            for physician in sorted_physicians:
+                current_gain = current_gains.get(physician.name, 0)
+                target_total = target_total_gains.get(physician.name, 0)
+                target_additional_gains[physician.name] = max(0, target_total - current_gain)
+            
+            # Now distribute patients according to targets, respecting team pools
+            # Allocate one patient at a time in rounds until ALL targets are met or pools exhausted
+            # CRITICAL: Never exceed target_total_gain - this ensures all gains differ by at most 1
+            # Continue allocating until all physicians reach their targets or pools are exhausted
+            remaining_after_targets = n_A_new_patients + n_B_new_patients + n_N_new_patients
+            max_iterations = remaining_after_targets * 3  # Safety limit (increased to ensure completion)
+            iteration = 0
+            
+            # Continue until all targets are met or no more patients available
+            while remaining_after_targets > 0 and iteration < max_iterations:
+                iteration += 1
+                made_progress = False
+                
+                for physician in sorted_physicians:
+                    target_total_gain = target_total_gains.get(physician.name, 0)
+                    # Always calculate current gain from actual physician state, not dictionary
+                    actual_current_gain = physician.total_patients - initial_counts[physician.name]
+                    needed = target_total_gain - actual_current_gain
+                    
+                    # CRITICAL: Don't exceed target - this ensures gains differ by at most 1
+                    if needed <= 0 or not can_take_patient(physician):
+                        continue
+                    
+                    # Try to allocate 1 patient from physician's own team pool first
+                    if physician.team == 'A' and n_A_new_patients > 0:
+                        if can_take_patient(physician) and actual_current_gain < target_total_gain:
+                            physician.add_patient()
+                            n_A_new_patients -= 1
+                            n_total_new_patients -= 1
+                            remaining_after_targets -= 1
+                            current_gains[physician.name] = physician.total_patients - initial_counts[physician.name]
+                            made_progress = True
+                            continue  # Move to next physician
+                    elif physician.team == 'B' and n_B_new_patients > 0:
+                        if can_take_patient(physician) and actual_current_gain < target_total_gain:
+                            physician.add_patient()
+                            n_B_new_patients -= 1
+                            n_total_new_patients -= 1
+                            remaining_after_targets -= 1
+                            current_gains[physician.name] = physician.total_patients - initial_counts[physician.name]
+                            made_progress = True
+                            continue  # Move to next physician
+                    elif physician.team == 'N' and n_N_new_patients > 0:
+                        if can_take_patient(physician) and actual_current_gain < target_total_gain:
+                            physician.add_patient()
+                            n_N_new_patients -= 1
+                            n_total_new_patients -= 1
+                            remaining_after_targets -= 1
+                            current_gains[physician.name] = physician.total_patients - initial_counts[physician.name]
+                            made_progress = True
+                            continue  # Move to next physician
+                    
+                    # If own team pool exhausted, try other pools to reach target
+                    # Recalculate actual gain in case it changed
+                    actual_current_gain = physician.total_patients - initial_counts[physician.name]
+                    if actual_current_gain < target_total_gain and can_take_patient(physician):
+                        # Try other pools if own team is exhausted or if buffer
+                        can_use_other_pools = (physician.is_buffer or 
+                                             (physician.team == 'A' and n_A_new_patients == 0) or
+                                             (physician.team == 'B' and n_B_new_patients == 0) or
+                                             (physician.team == 'N' and n_N_new_patients == 0))
+                        
+                        if can_use_other_pools:
+                            # Try all pools in order to reach target
+                            if n_A_new_patients > 0:
+                                actual_current_gain = physician.total_patients - initial_counts[physician.name]
+                                if can_take_patient(physician) and actual_current_gain < target_total_gain:
+                                    physician.add_patient()
+                                    n_A_new_patients -= 1
+                                    n_total_new_patients -= 1
+                                    remaining_after_targets -= 1
+                                    current_gains[physician.name] = physician.total_patients - initial_counts[physician.name]
+                                    made_progress = True
+                                    continue
+                            if n_B_new_patients > 0:
+                                actual_current_gain = physician.total_patients - initial_counts[physician.name]
+                                if can_take_patient(physician) and actual_current_gain < target_total_gain:
+                                    physician.add_patient()
+                                    n_B_new_patients -= 1
+                                    n_total_new_patients -= 1
+                                    remaining_after_targets -= 1
+                                    current_gains[physician.name] = physician.total_patients - initial_counts[physician.name]
+                                    made_progress = True
+                                    continue
+                            if n_N_new_patients > 0:
+                                actual_current_gain = physician.total_patients - initial_counts[physician.name]
+                                if can_take_patient(physician) and actual_current_gain < target_total_gain:
+                                    physician.add_patient()
+                                    n_N_new_patients -= 1
+                                    n_total_new_patients -= 1
+                                    remaining_after_targets -= 1
+                                    current_gains[physician.name] = physician.total_patients - initial_counts[physician.name]
+                                    made_progress = True
+                                    continue
+                
+                # If no progress was made, break to avoid infinite loop
+                if not made_progress:
+                    break
+                
+                # Update remaining count
+                remaining_after_targets = n_A_new_patients + n_B_new_patients + n_N_new_patients
+            
+            # Final pass: Distribute any remaining patients to physicians who haven't reached their target
+            # This ensures we use all available patients while respecting targets
+            remaining_final = n_A_new_patients + n_B_new_patients + n_N_new_patients
+            if remaining_final > 0:
+                # Sort by how far they are from target (those furthest below target get priority)
+                sorted_by_need = sorted(sorted_physicians, key=lambda x: (
+                    target_total_gains.get(x.name, 0) - (x.total_patients - initial_counts[x.name]),  # How many below target
+                    x.total_patients  # Then by total patients (lowest first)
+                ), reverse=True)  # Reverse so those furthest below target come first
+                
+                for physician in sorted_by_need:
+                    if remaining_final <= 0:
+                        break
+                    target = target_total_gains.get(physician.name, 0)
+                    actual_gain = physician.total_patients - initial_counts[physician.name]
+                    needed = target - actual_gain
+                    
+                    if needed <= 0 or not can_take_patient(physician):
+                        continue
+                    
+                    # Try any available pool
+                    if n_A_new_patients > 0 and actual_gain < target:
+                        physician.add_patient()
+                        n_A_new_patients -= 1
+                        n_total_new_patients -= 1
+                        remaining_final -= 1
+                    elif n_B_new_patients > 0 and actual_gain < target:
+                        physician.add_patient()
+                        n_B_new_patients -= 1
+                        n_total_new_patients -= 1
+                        remaining_final -= 1
+                    elif n_N_new_patients > 0 and actual_gain < target:
+                        physician.add_patient()
+                        n_N_new_patients -= 1
+                        n_total_new_patients -= 1
+                        remaining_final -= 1
+                
+                # Safety check: Ensure no physician has exceeded their target
+                for physician in sorted_physicians:
+                    target = target_total_gains.get(physician.name, 0)
+                    actual_gain = physician.total_patients - initial_counts[physician.name]
+                    if actual_gain > target:
+                        # This shouldn't happen, but if it does, we've found a bug
+                        # In production, we might want to log this or handle it differently
+                        pass  # For now, just note it - the checks above should prevent this
 
 # --- Streamlit App Begins Here ---
 st.set_page_config(page_title="Patient Allocator", page_icon="🩺", layout="wide")
 st.title("🩺 Physician Patient Allocation")
 st.write("Use the sidebar to set patient pools and parameters. Edit physician information in the table below, then click **Run Allocation** to distribute patients according to the logic.")
 
+# Load default parameters if available
+default_params = load_default_parameters()
+default_param_values = {
+    "n_total_new_patients": default_params["n_total_new_patients"] if default_params else 20,
+    "n_A_new_patients": default_params["n_A_new_patients"] if default_params else 10,
+    "n_B_new_patients": default_params["n_B_new_patients"] if default_params else 8,
+    "n_N_new_patients": default_params["n_N_new_patients"] if default_params else 2,
+    "n_step_down_patients": default_params["n_step_down_patients"] if default_params else 0,
+    "minimum_patients": default_params["minimum_patients"] if default_params else 10,
+    "maximum_patients": default_params["maximum_patients"] if default_params else 20,
+    "new_start_number": default_params["new_start_number"] if default_params else 5,
+}
+
 # Sidebar inputs
 with st.sidebar:
     st.header("Allocation Parameters")
-    n_total_new_patients = st.number_input("Total New Patients", min_value=0, value=20, step=1)
-    n_A_new_patients = st.number_input("Team A Pool", min_value=0, value=10, step=1)
-    n_B_new_patients = st.number_input("Team B Pool", min_value=0, value=8, step=1)
-    n_N_new_patients = st.number_input("Team N Pool", min_value=0, value=2, step=1)
-    n_step_down_patients = st.number_input("Total New Step Down Patients", min_value=0, value=0, step=1)
-    minimum_patients = st.number_input("Minimum Patients", min_value=0, value=10, step=1)
-    maximum_patients = st.number_input("Maximum Patients", min_value=1, value=20, step=1)
-    new_start_number = st.number_input("New Start Number", min_value=0, value=5, step=1)
+    n_total_new_patients = st.number_input("Total New Patients", min_value=0, value=default_param_values["n_total_new_patients"], step=1)
+    n_A_new_patients = st.number_input("Team A Pool", min_value=0, value=default_param_values["n_A_new_patients"], step=1)
+    n_B_new_patients = st.number_input("Team B Pool", min_value=0, value=default_param_values["n_B_new_patients"], step=1)
+    n_N_new_patients = st.number_input("Team N Pool", min_value=0, value=default_param_values["n_N_new_patients"], step=1)
+    n_step_down_patients = st.number_input("Total New Step Down Patients", min_value=0, value=default_param_values["n_step_down_patients"], step=1)
+    minimum_patients = st.number_input("Minimum Patients", min_value=0, value=default_param_values["minimum_patients"], step=1)
+    maximum_patients = st.number_input("Maximum Patients", min_value=1, value=default_param_values["maximum_patients"], step=1)
+    new_start_number = st.number_input("New Start Number", min_value=0, value=default_param_values["new_start_number"], step=1)
     st.markdown("---")
     st.info("Adjust team patient pools, step down patients, min/max patient requirements, and the number of initial patients for new physicians.")
+    
+    # Add button to save current setup as default
+    st.markdown("---")
+    st.markdown("### 💾 Save Current Setup")
+    if st.button("Save as Default Demo", use_container_width=True, type="secondary"):
+        # Save current parameters
+        params_dict = {
+            "n_total_new_patients": int(n_total_new_patients),
+            "n_A_new_patients": int(n_A_new_patients),
+            "n_B_new_patients": int(n_B_new_patients),
+            "n_N_new_patients": int(n_N_new_patients),
+            "n_step_down_patients": int(n_step_down_patients),
+            "minimum_patients": int(minimum_patients),
+            "maximum_patients": int(maximum_patients),
+            "new_start_number": int(new_start_number),
+        }
+        save_default_parameters(params_dict)
+        
+        # Save current physician table
+        if "physician_table" in st.session_state and not st.session_state["physician_table"].empty:
+            save_default_physicians(st.session_state["physician_table"])
+            st.success("✅ Current setup saved as default demo!")
+        else:
+            st.warning("⚠️ No physician data to save. Please add physicians first.")
+        st.rerun()
 
 # Default master list of all possible physicians
 DEFAULT_MASTER_LIST = [
@@ -450,31 +705,25 @@ DEFAULT_MASTER_LIST = [
 # Load master list from file or use default
 MASTER_PHYSICIAN_LIST = load_master_list(DEFAULT_MASTER_LIST)
 
-DEFAULT_ROWS = []
-# Initial default setup (e.g. first 20)
-for i, name in enumerate(MASTER_PHYSICIAN_LIST[:20]):
-    if i < 10:
-        team = "A"
-        is_buf = False
-    elif i == 10:
-        team = "A"
-        is_buf = True
-    else:
-        team = "B"
-        is_buf = False
-    
-    DEFAULT_ROWS.append({
-        "Yesterday": "",  # Text field for physician name who worked yesterday
-        "Physician Name": name, 
-        "Team": team, 
-        "New Physician": False, 
-        "Buffer": is_buf, 
-        "Working": True, 
-        "Total Patients": 0, 
-        "StepDown": 0, 
-        "Out of floor": 0, 
-        "Traded": 0
-    })
+# Default rows with specific physician data
+DEFAULT_ROWS = [
+    {"Yesterday": "Abadi", "Physician Name": "Abadi", "Team": "A", "New Physician": False, "Buffer": False, "Working": True, "Total Patients": 9, "StepDown": 1, "Out of floor": 0, "Traded": 0},
+    {"Yesterday": "Adhiakha", "Physician Name": "Adhiakha", "Team": "B", "New Physician": False, "Buffer": False, "Working": True, "Total Patients": 10, "StepDown": 2, "Out of floor": 0, "Traded": 0},
+    {"Yesterday": "", "Physician Name": "Ahir", "Team": "A", "New Physician": False, "Buffer": False, "Working": True, "Total Patients": 10, "StepDown": 3, "Out of floor": 0, "Traded": 0},
+    {"Yesterday": "Ali", "Physician Name": "Ali", "Team": "B", "New Physician": False, "Buffer": False, "Working": True, "Total Patients": 6, "StepDown": 1, "Out of floor": 0, "Traded": 0},
+    {"Yesterday": "Arora", "Physician Name": "Arora", "Team": "A", "New Physician": False, "Buffer": False, "Working": True, "Total Patients": 12, "StepDown": 3, "Out of floor": 0, "Traded": 0},
+    {"Yesterday": "Attrabala", "Physician Name": "Attrabala", "Team": "B", "New Physician": False, "Buffer": False, "Working": True, "Total Patients": 9, "StepDown": 1, "Out of floor": 0, "Traded": 0},
+    {"Yesterday": "Attrapisi", "Physician Name": "Attrapisi", "Team": "A", "New Physician": False, "Buffer": False, "Working": True, "Total Patients": 9, "StepDown": 3, "Out of floor": 0, "Traded": 0},
+    {"Yesterday": "Aung", "Physician Name": "Aung", "Team": "B", "New Physician": False, "Buffer": False, "Working": True, "Total Patients": 10, "StepDown": 0, "Out of floor": 0, "Traded": 0},
+    {"Yesterday": "Batlawala", "Physician Name": "Batlawala", "Team": "A", "New Physician": False, "Buffer": False, "Working": True, "Total Patients": 9, "StepDown": 2, "Out of floor": 0, "Traded": 0},
+    {"Yesterday": "Batth", "Physician Name": "Batth", "Team": "B", "New Physician": False, "Buffer": False, "Working": True, "Total Patients": 9, "StepDown": 2, "Out of floor": 0, "Traded": 0},
+    {"Yesterday": "Bhogireddy", "Physician Name": "Bhogireddy", "Team": "A", "New Physician": False, "Buffer": False, "Working": True, "Total Patients": 10, "StepDown": 2, "Out of floor": 0, "Traded": 0},
+]
+
+# Try to load default physicians first, otherwise use hardcoded defaults
+default_physicians_df = load_default_physicians()
+if default_physicians_df is not None and not default_physicians_df.empty:
+    DEFAULT_ROWS = default_physicians_df.to_dict('records')
 
 # Session state for the editable table (preserves edits/adds/removes)
 if "physician_table" not in st.session_state:
@@ -489,6 +738,21 @@ if "selected_physicians" not in st.session_state:
     # Use saved selections if available, otherwise use current table physicians
     current_table_physicians = st.session_state["physician_table"]["Physician Name"].tolist() if "physician_table" in st.session_state else []
     st.session_state["selected_physicians"] = [p for p in saved_selected if p in MASTER_PHYSICIAN_LIST] if saved_selected else [p for p in current_table_physicians if p in MASTER_PHYSICIAN_LIST]
+
+# Initialize team assignments for master list physicians
+if "master_team_assignments" not in st.session_state:
+    st.session_state["master_team_assignments"] = {}
+    # If we have a current table, initialize team assignments from it
+    if "physician_table" in st.session_state and not st.session_state["physician_table"].empty:
+        for _, row in st.session_state["physician_table"].iterrows():
+            name = str(row.get("Physician Name", ""))
+            team = str(row.get("Team", "A"))
+            if name and name in MASTER_PHYSICIAN_LIST:
+                st.session_state["master_team_assignments"][name] = team if team in ["A", "B", "N"] else "A"
+
+# Initialize checkbox reset counter
+if "checkbox_reset_counter" not in st.session_state:
+    st.session_state["checkbox_reset_counter"] = 0
 
 # Feature to manage master list
 with st.expander("📝 Manage Master Physician List", expanded=False):
@@ -524,31 +788,85 @@ with st.expander("🏥 Select Working Doctors from Master List", expanded=True):
     
     # Show yesterday's physicians if available
     if yesterday_physicians:
-        st.markdown(f"**Yesterday's Physicians ({len(yesterday_physicians)}):** {', '.join(yesterday_physicians)}")
+        # Ensure all values are strings for join operation
+        yesterday_str = [str(name) for name in yesterday_physicians if name]
+        st.markdown(f"**Yesterday's Physicians ({len(yesterday_str)}):** {', '.join(yesterday_str)}")
     
     # Create checkboxes for each doctor in the master list
     st.markdown("**Select Today's Physicians:**")
     
-    # Organize checkboxes in columns for better layout
+    # Organize checkboxes in columns for better layout (column-wise, not row-wise)
+    # Each column should read alphabetically from top to bottom
     num_cols = 3
     cols = st.columns(num_cols)
     
+    # Calculate number of items per column (ceiling division)
+    items_per_col = (len(MASTER_PHYSICIAN_LIST) + num_cols - 1) // num_cols
+    
+    # Split the alphabetically sorted list into columns
+    # Column 0 gets first items_per_col items, Column 1 gets next items_per_col, etc.
+    column_lists = []
+    for col_idx in range(num_cols):
+        start_idx = col_idx * items_per_col
+        end_idx = min(start_idx + items_per_col, len(MASTER_PHYSICIAN_LIST))
+        column_lists.append(MASTER_PHYSICIAN_LIST[start_idx:end_idx])
+    
     selected_doctors = []
-    for idx, doctor_name in enumerate(MASTER_PHYSICIAN_LIST):
-        col_idx = idx % num_cols
+    # Display checkboxes column by column (top to bottom in each column)
+    for col_idx in range(num_cols):
         with cols[col_idx]:
-            # Check if this doctor was selected previously or is in yesterday's list
-            is_checked = doctor_name in st.session_state["selected_physicians"]
-            if st.checkbox(doctor_name, value=is_checked, key=f"doctor_checkbox_{doctor_name}"):
-                selected_doctors.append(doctor_name)
+            for doctor_name in column_lists[col_idx]:
+                # Create a container with checkbox and team selector side by side
+                checkbox_col, team_col = st.columns([3, 1])
+                
+                with checkbox_col:
+                    # Check if this doctor was selected previously or is in yesterday's list
+                    # Use reset counter in key to force checkbox reset when "Uncheck All" is clicked
+                    reset_counter = st.session_state.get("checkbox_reset_counter", 0)
+                    is_checked = doctor_name in st.session_state["selected_physicians"]
+                    checkbox_value = st.checkbox(doctor_name, value=is_checked, key=f"doctor_checkbox_{doctor_name}_{reset_counter}")
+                    if checkbox_value:
+                        selected_doctors.append(doctor_name)
+                
+                with team_col:
+                    # Get current team assignment or default to "A"
+                    current_team = st.session_state["master_team_assignments"].get(doctor_name, "A")
+                    team_index = ["A", "B", "N"].index(current_team) if current_team in ["A", "B", "N"] else 0
+                    selected_team = st.selectbox(
+                        "Team",
+                        options=["A", "B", "N"],
+                        index=team_index,
+                        key=f"team_select_{doctor_name}",
+                        label_visibility="collapsed"
+                    )
+                    # Update session state with team assignment
+                    st.session_state["master_team_assignments"][doctor_name] = selected_team
     
     # Update session state with selected doctors
     st.session_state["selected_physicians"] = selected_doctors
     
-    if st.button("Generate Table from Selection", type="primary"):
+    # Add buttons for clearing selections and generating table
+    button_col1, button_col2 = st.columns([1, 1])
+    with button_col1:
+        if st.button("Uncheck All", use_container_width=True):
+            st.session_state["selected_physicians"] = []
+            # Increment reset counter to force all checkboxes to reset
+            st.session_state["checkbox_reset_counter"] = st.session_state.get("checkbox_reset_counter", 0) + 1
+            st.rerun()
+    with button_col2:
+        generate_btn = st.button("Generate Table from Selection", type="primary", use_container_width=True)
+    
+    if generate_btn:
+        # Get selected doctors again in case they changed
+        selected_doctors = st.session_state.get("selected_physicians", [])
         if selected_doctors:
             # Save current physicians as yesterday's before generating new table
-            current_physicians = st.session_state["physician_table"]["Physician Name"].tolist() if "physician_table" in st.session_state else []
+            if "physician_table" in st.session_state:
+                # Filter out NaN values and convert to strings
+                current_physicians = [str(name).strip() for name in st.session_state["physician_table"]["Physician Name"].tolist() 
+                                    if pd.notna(name) and str(name).strip()]
+            else:
+                current_physicians = []
             if current_physicians:
                 save_yesterday_physicians(current_physicians)
             
@@ -557,8 +875,8 @@ with st.expander("🏥 Select Working Doctors from Master List", expanded=True):
             
             new_rows = []
             for i, name in enumerate(selected_doctors):
-                # Simple logic to alternate teams for the new table
-                team = "A" if i % 2 == 0 else "B"
+                # Use team assignment from master list, or default to "A" if not set
+                team = st.session_state["master_team_assignments"].get(name, "A")
                 # Pre-fill Yesterday column with physician name if they worked yesterday
                 yesterday_value = name if name in yesterday_physicians else ""
                 new_rows.append({
@@ -682,13 +1000,17 @@ if yesterday_physicians or current_table is not None:
     info_col1, info_col2 = st.columns(2)
     with info_col1:
         if yesterday_physicians:
-            st.markdown(f"**Yesterday's Physicians ({len(yesterday_physicians)}):**")
-            st.text(", ".join(yesterday_physicians))
+            # Ensure all values are strings for join operation
+            yesterday_str = [str(name) for name in yesterday_physicians if name]
+            st.markdown(f"**Yesterday's Physicians ({len(yesterday_str)}):**")
+            st.text(", ".join(yesterday_str))
         else:
             st.markdown("**Yesterday's Physicians:** *No data available*")
     with info_col2:
         if current_table is not None and not current_table.empty:
-            today_physicians = current_table["Physician Name"].tolist()
+            # Filter out NaN values and convert to strings
+            today_physicians = [str(name).strip() for name in current_table["Physician Name"].tolist() 
+                              if pd.notna(name) and str(name).strip()]
             st.markdown(f"**Today's Physicians ({len(today_physicians)}):**")
             st.text(", ".join(today_physicians))
         else:
@@ -779,7 +1101,9 @@ if run:
     save_data(edited_phys)  # Persist changes
     
     # Save current physicians as yesterday's for next time
-    current_physician_names = edited_phys["Physician Name"].tolist()
+    # Filter out NaN values and convert to strings
+    current_physician_names = [str(name).strip() for name in edited_phys["Physician Name"].tolist() 
+                              if pd.notna(name) and str(name).strip()]
     save_yesterday_physicians(current_physician_names)
     
     current_table = edited_phys.copy()
@@ -858,6 +1182,7 @@ if run:
             "Team": p.team,
             "New Physician": p.is_new,
             "Buffer": p.is_buffer,
+            "Original Total Patients": initial_counts[p.name],
             "Total Patients": p.total_patients,
             "StepDown": p.step_down_patients,
             "Out of floor": p.transferred_patients,
@@ -871,6 +1196,20 @@ if run:
     
     # Store results in session state so they persist across reruns
     st.session_state["allocation_results"] = results_df.copy()
+    st.session_state["total_new_patients_input"] = int(n_total_new_patients)  # Store for display
+    
+    # Calculate and store allocation details for debugging
+    total_gained_calc = sum(p.total_patients - initial_counts[p.name] for p in working_physicians)
+    gain_distribution = {}
+    for p in working_physicians:
+        gain = p.total_patients - initial_counts[p.name]
+        gain_distribution[gain] = gain_distribution.get(gain, 0) + 1
+    st.session_state["allocation_debug"] = {
+        "total_gained": total_gained_calc,
+        "expected_total": int(n_total_new_patients),
+        "gain_distribution": gain_distribution
+    }
+    
     st.session_state["allocation_summary"] = {
         "team_a_total": sum(p.total_patients for p in working_physicians if p.team == 'A'),
         "team_b_total": sum(p.total_patients for p in working_physicians if p.team == 'B'),
@@ -907,6 +1246,49 @@ if "allocation_results" in st.session_state and st.session_state["allocation_res
         ).reset_index(drop=True)
     
     st.dataframe(display_df, hide_index=True, use_container_width=True)
+    
+    # Calculate and display total gained patients and distribution
+    if "allocation_results" in st.session_state and st.session_state["allocation_results"] is not None:
+        total_gained = display_df["Gained"].sum()
+        gain_counts = display_df["Gained"].value_counts().sort_index()
+        expected_total = st.session_state.get("total_new_patients_input", 0)
+        num_physicians_shown = len(display_df)
+        
+        st.markdown("### 📈 Gain Distribution Analysis")
+        col_analysis1, col_analysis2 = st.columns(2)
+        with col_analysis1:
+            st.metric("Total Patients Gained (Sum)", int(total_gained))
+            st.metric("Expected Total (Total New Patients)", int(expected_total))
+            st.metric("Number of Physicians", int(num_physicians_shown))
+            if total_gained != expected_total:
+                st.error(f"⚠️ Mismatch! Gained ({int(total_gained)}) ≠ Expected ({int(expected_total)})")
+            else:
+                st.success("✅ Total gained matches expected!")
+        with col_analysis2:
+            st.markdown("**Distribution by Gain Amount:**")
+            for gain_amount in sorted(gain_counts.index):
+                count = int(gain_counts[gain_amount])
+                st.markdown(f"- **{count}** physician(s) gained **{int(gain_amount)}** patient(s)")
+            
+            # Show expected distribution calculation
+            if expected_total > 0 and num_physicians_shown > 0:
+                st.markdown("---")
+                st.markdown("**Expected Distribution:**")
+                base_expected = expected_total // num_physicians_shown
+                remainder_expected = expected_total % num_physicians_shown
+                st.markdown(f"- Base: {base_expected} patients per physician")
+                st.markdown(f"- Remainder: {remainder_expected} physicians should get {base_expected + 1}")
+                st.markdown(f"- Rest: {num_physicians_shown - remainder_expected} physicians should get {base_expected}")
+        
+        # Show min and max gains
+        min_gain = int(display_df["Gained"].min())
+        max_gain = int(display_df["Gained"].max())
+        gain_diff = max_gain - min_gain
+        st.markdown(f"**Gain Range:** Minimum = {min_gain}, Maximum = {max_gain}, Difference = {gain_diff}")
+        if gain_diff > 1:
+            st.warning(f"⚠️ Gain difference is {gain_diff}, should be at most 1!")
+        else:
+            st.success("✅ All gains differ by at most 1!")
     
     # Display summary if it exists
     if "allocation_summary" in st.session_state:
