@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import os
+from datetime import datetime
 
 # Files for persistent storage
 DATA_FILE = "physician_data.csv"
@@ -257,6 +258,25 @@ def allocate_patients(
     # Store initial patient counts for even distribution later
     initial_counts = {p.name: p.total_patients for p in physicians}
     
+    # Store initial pool sizes for tracking
+    initial_A_pool = n_A_new_patients
+    initial_B_pool = n_B_new_patients
+    initial_N_pool = n_N_new_patients
+    
+    # Track pool allocations: how many from each pool went to each team
+    # Format: pool_allocations[pool_team][target_team] = count
+    pool_allocations = {
+        'A': {'A': 0, 'B': 0, 'N': 0},
+        'B': {'A': 0, 'B': 0, 'N': 0},
+        'N': {'A': 0, 'B': 0, 'N': 0}
+    }
+    
+    # Helper function to track pool allocation
+    def track_pool_allocation(pool_team, target_team):
+        """Track that a patient from pool_team was allocated to target_team"""
+        if pool_team in pool_allocations and target_team in pool_allocations[pool_team]:
+            pool_allocations[pool_team][target_team] += 1
+    
     # Make team lists
     team_A = [p for p in physicians if p.team == 'A']
     team_B = [p for p in physicians if p.team == 'B']
@@ -283,479 +303,166 @@ def allocate_patients(
         # DO NOT check total patients for step-down allocation
         return gained_stepdown < 1
     
-    # First, allocate step down patients: Team B first, then Team A
-    # IMPORTANT: Step-down patients do NOT count towards total new patient pools
-    # They only reduce n_step_down_patients, NOT n_total_new_patients, n_A_new_patients, n_B_new_patients, or n_N_new_patients
-    # Simple algorithm:
-    # 1. Get all Team B physicians (working only)
-    # 2. Sort by INITIAL StepDown count (lowest to highest) - use initial_stepdown_counts
-    # 3. Assign one step-down patient to each in sorted order
-    # DO NOT consider total patient count for step-down allocation
+    # ========== NEW ALLOCATION LOGIC ==========
+    # Step 1: Calculate total patients to distribute
+    # Total = Team A Pool + Team B Pool + Step Down (trades added separately)
+    total_to_distribute = n_A_new_patients + n_B_new_patients + n_step_down_patients
     
-    # Filter to only working physicians (do NOT filter by can_take_patient for step-down)
-    working_team_B = [p for p in team_B if p.is_working]
-    working_team_A = [p for p in team_A if p.is_working]
+    print(f"\n=== ALLOCATION DEBUG ===")
+    print(f"Team A Pool: {n_A_new_patients}")
+    print(f"Team B Pool: {n_B_new_patients}")
+    print(f"Step Down: {n_step_down_patients}")
+    print(f"Total to distribute: {total_to_distribute}")
     
-    # DEBUG: Show initial stepdown counts
-    print(f"\n=== STEP-DOWN ALLOCATION TRACE ===")
-    print(f"Step 1: Captured initial_stepdown_counts:")
-    for name, count in sorted(initial_stepdown_counts.items()):
-        if any(p.name == name and p.team == 'B' for p in working_team_B):
-            print(f"  {name}: {count}")
+    # Step 2: Get all working physicians and sort by total patients (low to high)
+    all_working = [p for p in physicians if p.is_working]
+    all_working.sort(key=lambda x: x.total_patients)
     
-    print(f"\nStep 2: Team B working physicians: {[p.name for p in working_team_B]}")
+    print(f"All working physicians (sorted by total, low to high):")
+    for p in all_working:
+        print(f"  {p.name}: total={p.total_patients}, is_new={p.is_new}")
     
-    # Sort Team B physicians by INITIAL StepDown count (lowest to highest)
-    # Use initial_stepdown_counts to get the original value before any allocation
-    team_B_sorted = sorted(working_team_B, key=lambda x: initial_stepdown_counts.get(x.name, x.step_down_patients))
+    remaining = total_to_distribute
     
-    print(f"\nStep 3: Team B sorted by INITIAL StepDown (lowest to highest):")
-    for p in team_B_sorted:
-        initial_sd = initial_stepdown_counts.get(p.name, p.step_down_patients)
-        current_sd = p.step_down_patients
-        print(f"  {p.name}: initial={initial_sd}, current={current_sd}")
-    
-    print(f"\nStep 4: Distributing {n_step_down_patients} step-down patients...")
-    # Distribute step-down patients to Team B physicians in sorted order
-    for physician in team_B_sorted:
-        if n_step_down_patients <= 0:
-            print(f"  Pool exhausted. Remaining: {n_step_down_patients}")
-            break
-        # Only give if they haven't already gained a step-down (check gained, not total)
-        initial_sd = initial_stepdown_counts.get(physician.name, 0)
-        current_sd = physician.step_down_patients
-        gained = current_sd - initial_sd
-        can_take = can_take_step_down(physician)
-        print(f"  Processing {physician.name}: initial={initial_sd}, current={current_sd}, gained={gained}, can_take={can_take}, pool={n_step_down_patients}")
-        if can_take:
-            physician.add_patient(is_step_down=True)
-            n_step_down_patients -= 1
-            print(f"    ✓ GAVE step-down to {physician.name}. New StepDown={physician.step_down_patients}, pool={n_step_down_patients}")
-        else:
-            print(f"    ✗ SKIPPED {physician.name} (cannot take step-down)")
-    
-    # If there are still step-down patients remaining, then distribute to Team A
-    if n_step_down_patients > 0:
-        print(f"\nStep 5: Remaining step-down patients: {n_step_down_patients}, distributing to Team A...")
-        # Sort Team A physicians by INITIAL StepDown count (lowest to highest)
-        # Use initial_stepdown_counts to get the original value before any allocation
-        team_A_sorted = sorted(working_team_A, key=lambda x: initial_stepdown_counts.get(x.name, x.step_down_patients))
-        
-        print(f"Team A sorted by INITIAL StepDown (lowest to highest):")
-        for p in team_A_sorted:
-            initial_sd = initial_stepdown_counts.get(p.name, p.step_down_patients)
-            current_sd = p.step_down_patients
-            print(f"  {p.name}: initial={initial_sd}, current={current_sd}")
-        
-        # Distribute step-down patients to Team A physicians in sorted order
-        for physician in team_A_sorted:
-            if n_step_down_patients <= 0:
-                print(f"  Pool exhausted. Remaining: {n_step_down_patients}")
-                break
-            # Only give if they haven't already gained a step-down (check gained, not total)
-            initial_sd = initial_stepdown_counts.get(physician.name, 0)
-            current_sd = physician.step_down_patients
-            gained = current_sd - initial_sd
-            can_take = can_take_step_down(physician)
-            print(f"  Processing {physician.name}: initial={initial_sd}, current={current_sd}, gained={gained}, can_take={can_take}, pool={n_step_down_patients}")
-            if can_take:
-                physician.add_patient(is_step_down=True)
-                n_step_down_patients -= 1
-                print(f"    ✓ GAVE step-down to {physician.name}. New StepDown={physician.step_down_patients}, pool={n_step_down_patients}")
-            else:
-                print(f"    ✗ SKIPPED {physician.name} (cannot take step-down)")
-    
-    print(f"\n=== END STEP-DOWN ALLOCATION TRACE ===\n")
-    
-    # Second, fix physicians who are more than 1 less than the minimum value
-    # (i.e., if minimum is 10, fix physicians with 8 or fewer patients)
-    # EXCLUDE new physicians - they will be handled in the next phase
-    threshold = minimum_patients - 2
-    for physician in physicians:
-        # Skip new physicians - they get exactly new_start_number in the next phase
-        if physician.is_new:
+    # Step 3: Allocate to new physicians until they reach new_start_number
+    # Do NOT include them in the general distribution afterward
+    new_physicians = [p for p in all_working if p.is_new]
+    print(f"\nStep 3: New physician allocation (new_start_number={new_start_number})")
+    for physician in new_physicians:
+        if physician.total_patients >= new_start_number:
+            print(f"  {physician.name}: already at {physician.total_patients}, skip")
             continue
-        if physician.total_patients <= threshold and can_take_patient(physician):
-            needed = minimum_patients - physician.total_patients
-            # Allocate from the physician's team pool
-            if physician.team == 'A':
-                for _ in range(min(needed, n_A_new_patients)):
-                    if can_take_patient(physician):
-                        physician.add_patient()
-                        n_A_new_patients -= 1
-                        n_total_new_patients -= 1
-                    else:
-                        break
-            elif physician.team == 'B':
-                for _ in range(min(needed, n_B_new_patients)):
-                    if can_take_patient(physician):
-                        physician.add_patient()
-                        n_B_new_patients -= 1
-                        n_total_new_patients -= 1
-                    else:
-                        break
-            elif physician.team == 'N':
-                for _ in range(min(needed, n_N_new_patients)):
-                    if can_take_patient(physician):
-                        physician.add_patient()
-                        n_N_new_patients -= 1
-                        n_total_new_patients -= 1
-                    else:
-                        break
-
-    # Third, fill up new physicians to EXACTLY new_start_number
-    # IMPORTANT: New physicians get exactly new_start_number patients (if below it) or 0 (if already at/above it)
-    # They do NOT participate in the general distribution cycle
-    # Priority: own team pool first, then other pools if needed
-    for physician in physicians:
-        if physician.is_new:
-            # Calculate how many patients are needed to reach new_start_number
-            needed = new_start_number - physician.total_patients
-            # If already at or above new_start_number, needed will be <= 0, so skip allocation
-            # This ensures new physicians who are already at new_start_number get 0 patients
-            if needed <= 0:
-                continue  # Skip - already at or above new_start_number, should get 0
-            # Allocate exactly the number needed to reach new_start_number
-            while needed > 0 and can_take_patient(physician):
-                allocated = False
-                
-                # First, try to allocate from physician's own team pool
-                if physician.team == 'A' and n_A_new_patients > 0:
-                    physician.add_patient()
-                    n_A_new_patients -= 1
-                    n_total_new_patients -= 1
-                    needed -= 1
-                    allocated = True
-                elif physician.team == 'B' and n_B_new_patients > 0:
-                    physician.add_patient()
-                    n_B_new_patients -= 1
-                    n_total_new_patients -= 1
-                    needed -= 1
-                    allocated = True
-                elif physician.team == 'N' and n_N_new_patients > 0:
-                    physician.add_patient()
-                    n_N_new_patients -= 1
-                    n_total_new_patients -= 1
-                    needed -= 1
-                    allocated = True
-                
-                # If own team pool is exhausted, try other pools
-                if not allocated:
-                    if n_A_new_patients > 0:
-                        physician.add_patient()
-                        n_A_new_patients -= 1
-                        n_total_new_patients -= 1
-                        needed -= 1
-                        allocated = True
-                    elif n_B_new_patients > 0:
-                        physician.add_patient()
-                        n_B_new_patients -= 1
-                        n_total_new_patients -= 1
-                        needed -= 1
-                        allocated = True
-                    elif n_N_new_patients > 0:
-                        physician.add_patient()
-                        n_N_new_patients -= 1
-                        n_total_new_patients -= 1
-                        needed -= 1
-                        allocated = True
-                
-                # If no pools have patients available, break (can't allocate more)
-                if not allocated:
-                    break
-
-    # Fourth, distribute remaining patients with pattern-based allocation
-    # Team N physicians get priority from Team N Pool first
-    # Then calculate distribution pattern (e.g., for 47 patients: 5 get 3, 16 get 2)
-    # Physicians with fewer patients get higher numbers
+        needed = new_start_number - physician.total_patients
+        to_give = min(needed, remaining)
+        for _ in range(to_give):
+            physician.add_patient()
+            remaining -= 1
+        print(f"  {physician.name}: gave {to_give}, now at {physician.total_patients}")
     
-    # Get all non-new physicians for distribution
-    # CRITICAL: New physicians must be completely excluded from general distribution
-    # They only get patients to reach new_start_number (or 0 if already at/above it)
-    non_new_physicians = [p for p in physicians if not p.is_new and can_take_patient(p)]
+    # Step 4: Get non-new physicians for general distribution
+    non_new = [p for p in all_working if not p.is_new]
+    num_non_new = len(non_new)
     
-    # Double-check: Ensure no new physicians are included
-    non_new_physicians = [p for p in non_new_physicians if not p.is_new]
+    print(f"\nStep 4: General distribution (round-robin)")
+    print(f"Non-new physicians: {num_non_new}")
+    print(f"Remaining patients: {remaining}")
     
-    # Calculate current gains so far (only for non-new physicians)
-    current_gains = {p.name: p.total_patients - initial_counts[p.name] for p in non_new_physicians}
-    
-    # FIRST: Allocate Team N Pool to Team N physicians (priority)
-    team_N_non_new = [p for p in team_N if not p.is_new and can_take_patient(p)]
-    if team_N_non_new and n_N_new_patients > 0:
-        # Sort Team N physicians by current patient count (lowest first)
-        team_N_sorted = sorted(team_N_non_new, key=lambda x: x.total_patients)
+    if remaining > 0 and num_non_new > 0:
+        round_num = 0
         
-        # Distribute Team N Pool to Team N physicians
-        for physician in team_N_sorted:
-            if n_N_new_patients <= 0:
-                break
-            if can_take_patient(physician):
+        # Round-robin: while remaining >= num_non_new, give +1 to ALL non-new physicians
+        while remaining >= num_non_new:
+            round_num += 1
+            print(f"  Round {round_num}: giving +1 to all {num_non_new} physicians")
+            for physician in non_new:
+                if can_take_patient(physician):
+                    physician.add_patient()
+                    remaining -= 1
+        
+        print(f"  After full rounds: remaining={remaining}")
+        
+        # Now remaining < num_non_new
+        # First, give to physicians below minimum
+        if remaining > 0:
+            below_min = [p for p in non_new if p.total_patients < minimum_patients and can_take_patient(p)]
+            below_min.sort(key=lambda x: x.total_patients)  # Lowest first
+            
+            print(f"  Physicians below minimum ({minimum_patients}): {len(below_min)}")
+            for physician in below_min:
+                if remaining <= 0:
+                    break
                 physician.add_patient()
-                n_N_new_patients -= 1
-                n_total_new_patients -= 1
-                current_gains[physician.name] = current_gains.get(physician.name, 0) + 1
-    
-    # If Team N Pool is exhausted but Team N physicians still need patients,
-    # they can get from other pools in the general distribution below
-    
-    # Recalculate current gains right before final distribution to ensure accuracy
-    # This accounts for any allocations made in earlier phases
-    current_gains = {p.name: p.total_patients - initial_counts[p.name] for p in non_new_physicians}
-    
-    # Calculate remaining patients across all pools
-    remaining_patients = n_A_new_patients + n_B_new_patients + n_N_new_patients
-    
-    # Store for verification
-    initial_remaining = remaining_patients
-    
-    if remaining_patients > 0 and non_new_physicians:
-        # New algorithm: Ensure gained patients differ by at most 1
-        # If physician number < patient number: assign +1 to all physicians
-        # If not: assign +1 to physicians with lowest patients
-        # Maximum difference in gained patients is 1
-        num_physicians = len(non_new_physicians)
+                remaining -= 1
+                print(f"    {physician.name}: +1 (below min), now at {physician.total_patients}")
         
-        if num_physicians > 0:
-            # Sort physicians by INITIAL patient count (lowest first) - determines who gets patients first
-            sorted_physicians = sorted(non_new_physicians, key=lambda x: (
-                initial_counts.get(x.name, x.total_patients),  # Sort by INITIAL total patients (lowest first)
-                x.total_patients  # Then by current total patients as tiebreaker
-            ))
-            
-            # NEW ALGORITHM:
-            # If num_physicians > remaining_patients: Give +1 to each physician in cycles until remaining = 0
-            # If num_physicians <= remaining_patients: Give +1 to all physicians, then continue with lowest totals
-            
-            # Initialize additional gains to 0 for all
-            target_additional_gains = {p.name: 0 for p in sorted_physicians}
-            
-            patients_to_distribute = remaining_patients
-            
-            if num_physicians > remaining_patients:
-                # Fewer patients than physicians: Give +1 to each physician in cycles (round-robin)
-                # Continue until all patients are distributed
-                while patients_to_distribute > 0:
-                    # Sort by: current additional gain (lowest first), then initial total patients (lowest first)
-                    sorted_by_additional = sorted(sorted_physicians, key=lambda x: (
-                        target_additional_gains.get(x.name, 0),  # Lowest additional gain first
-                        initial_counts.get(x.name, x.total_patients),  # Then lowest initial totals
-                        x.total_patients  # Then current totals
-                    ))
-                    
-                    # Give +1 to up to 'patients_to_distribute' physicians in this cycle
-                    for physician in sorted_by_additional:
-                        if patients_to_distribute <= 0:
-                            break
-                        # Give this physician +1 additional
-                        target_additional_gains[physician.name] = target_additional_gains.get(physician.name, 0) + 1
-                        patients_to_distribute -= 1
-            else:
-                # More or equal patients than physicians: Give +1 to all physicians first
-                for physician in sorted_physicians:
-                    if patients_to_distribute <= 0:
-                        break
-                    target_additional_gains[physician.name] = target_additional_gains.get(physician.name, 0) + 1
-                    patients_to_distribute -= 1
-                
-                # Then continue giving +1 to physicians with lowest totals until remaining = 0
-                while patients_to_distribute > 0:
-                    # Sort by: current additional gain (lowest first), then initial total patients (lowest first)
-                    sorted_by_additional = sorted(sorted_physicians, key=lambda x: (
-                        target_additional_gains.get(x.name, 0),  # Lowest additional gain first
-                        initial_counts.get(x.name, x.total_patients),  # Then lowest initial totals
-                        x.total_patients  # Then current totals
-                    ))
-                    
-                    # Give +1 to physicians with lowest totals
-                    for physician in sorted_by_additional:
-                        if patients_to_distribute <= 0:
-                            break
-                        # Give this physician +1 additional
-                        target_additional_gains[physician.name] = target_additional_gains.get(physician.name, 0) + 1
-                        patients_to_distribute -= 1
-            
-            # Calculate target total gains (current + additional) for allocation
-            # BUT ensure all FINAL total gains differ by at most 1
-            # Calculate based on: sum of current_gains + remaining_patients
-            total_current_gains_sum = sum(current_gains.get(p.name, 0) for p in sorted_physicians)
-            total_final_gains_needed = total_current_gains_sum + remaining_patients
-            
-            # Calculate base and remainder for final gains
-            base_final_gain = total_final_gains_needed // num_physicians
-            remainder_final = total_final_gains_needed % num_physicians
-            
-            # Assign final gains - those with lowest initial totals get the higher amount
-            target_total_gains = {}
-            for i, physician in enumerate(sorted_physicians):
-                if i < remainder_final:
-                    # First 'remainder_final' physicians (lowest INITIAL totals) get base_final_gain + 1
-                    target_total_gains[physician.name] = base_final_gain + 1
-                else:
-                    # Rest get base_final_gain
-                    target_total_gains[physician.name] = base_final_gain
-            
-            # Recalculate target_additional_gains based on normalized targets
-            for physician in sorted_physicians:
-                current_gain = current_gains.get(physician.name, 0)
-                target_total = target_total_gains.get(physician.name, 0)
-                target_additional_gains[physician.name] = max(0, target_total - current_gain)
-            
-            # Now distribute patients according to targets, respecting team pools
-            # Allocate one patient at a time in rounds until ALL targets are met or pools exhausted
-            # CRITICAL: Never exceed target_total_gain - this ensures all gains differ by at most 1
-            # Continue allocating until all physicians reach their targets or pools are exhausted
-            remaining_after_targets = n_A_new_patients + n_B_new_patients + n_N_new_patients
-            max_iterations = remaining_after_targets * 3  # Safety limit (increased to ensure completion)
-            iteration = 0
-            
-            # Continue until all targets are met or no more patients available
-            while remaining_after_targets > 0 and iteration < max_iterations:
-                iteration += 1
-                made_progress = False
-                
-                for physician in sorted_physicians:
-                    # CRITICAL: Skip new physicians - they should never be in sorted_physicians, but double-check
-                    if physician.is_new:
-                        continue
-                    
-                    target_total_gain = target_total_gains.get(physician.name, 0)
-                    # Always calculate current gain from actual physician state, not dictionary
-                    actual_current_gain = physician.total_patients - initial_counts[physician.name]
-                    needed = target_total_gain - actual_current_gain
-                    
-                    # CRITICAL: Don't exceed target - this ensures gains differ by at most 1
-                    if needed <= 0 or not can_take_patient(physician):
-                        continue
-                    
-                    # Try to allocate 1 patient from physician's own team pool first
-                    if physician.team == 'A' and n_A_new_patients > 0:
-                        if can_take_patient(physician) and actual_current_gain < target_total_gain:
-                            physician.add_patient()
-                            n_A_new_patients -= 1
-                            n_total_new_patients -= 1
-                            remaining_after_targets -= 1
-                            current_gains[physician.name] = physician.total_patients - initial_counts[physician.name]
-                            made_progress = True
-                            continue  # Move to next physician
-                    elif physician.team == 'B' and n_B_new_patients > 0:
-                        if can_take_patient(physician) and actual_current_gain < target_total_gain:
-                            physician.add_patient()
-                            n_B_new_patients -= 1
-                            n_total_new_patients -= 1
-                            remaining_after_targets -= 1
-                            current_gains[physician.name] = physician.total_patients - initial_counts[physician.name]
-                            made_progress = True
-                            continue  # Move to next physician
-                    elif physician.team == 'N' and n_N_new_patients > 0:
-                        if can_take_patient(physician) and actual_current_gain < target_total_gain:
-                            physician.add_patient()
-                            n_N_new_patients -= 1
-                            n_total_new_patients -= 1
-                            remaining_after_targets -= 1
-                            current_gains[physician.name] = physician.total_patients - initial_counts[physician.name]
-                            made_progress = True
-                            continue  # Move to next physician
-                    
-                    # If own team pool exhausted, try other pools to reach target
-                    # Recalculate actual gain in case it changed
-                    actual_current_gain = physician.total_patients - initial_counts[physician.name]
-                    if actual_current_gain < target_total_gain and can_take_patient(physician):
-                        # Try other pools if own team is exhausted or if buffer
-                        can_use_other_pools = (physician.is_buffer or 
-                                             (physician.team == 'A' and n_A_new_patients == 0) or
-                                             (physician.team == 'B' and n_B_new_patients == 0) or
-                                             (physician.team == 'N' and n_N_new_patients == 0))
-                        
-                        if can_use_other_pools:
-                            # Try all pools in order to reach target
-                            if n_A_new_patients > 0:
-                                actual_current_gain = physician.total_patients - initial_counts[physician.name]
-                                if can_take_patient(physician) and actual_current_gain < target_total_gain:
-                                    physician.add_patient()
-                                    n_A_new_patients -= 1
-                                    n_total_new_patients -= 1
-                                    remaining_after_targets -= 1
-                                    current_gains[physician.name] = physician.total_patients - initial_counts[physician.name]
-                                    made_progress = True
-                                    continue
-                            if n_B_new_patients > 0:
-                                actual_current_gain = physician.total_patients - initial_counts[physician.name]
-                                if can_take_patient(physician) and actual_current_gain < target_total_gain:
-                                    physician.add_patient()
-                                    n_B_new_patients -= 1
-                                    n_total_new_patients -= 1
-                                    remaining_after_targets -= 1
-                                    current_gains[physician.name] = physician.total_patients - initial_counts[physician.name]
-                                    made_progress = True
-                                    continue
-                            if n_N_new_patients > 0:
-                                actual_current_gain = physician.total_patients - initial_counts[physician.name]
-                                if can_take_patient(physician) and actual_current_gain < target_total_gain:
-                                    physician.add_patient()
-                                    n_N_new_patients -= 1
-                                    n_total_new_patients -= 1
-                                    remaining_after_targets -= 1
-                                    current_gains[physician.name] = physician.total_patients - initial_counts[physician.name]
-                                    made_progress = True
-                                    continue
-                
-                # If no progress was made, break to avoid infinite loop
-                if not made_progress:
+        # Then, give remaining to physicians with lowest totals
+        if remaining > 0:
+            non_new.sort(key=lambda x: x.total_patients)  # Re-sort by current totals
+            print(f"  Distributing final {remaining} patients to lowest totals:")
+            for physician in non_new:
+                if remaining <= 0:
                     break
-                
-                # Update remaining count
-                remaining_after_targets = n_A_new_patients + n_B_new_patients + n_N_new_patients
-            
-            # Final pass: Distribute any remaining patients to physicians who haven't reached their target
-            # This ensures we use all available patients while respecting targets
-            remaining_final = n_A_new_patients + n_B_new_patients + n_N_new_patients
-            if remaining_final > 0:
-                # Sort by how far they are from target (those furthest below target get priority)
-                sorted_by_need = sorted(sorted_physicians, key=lambda x: (
-                    target_total_gains.get(x.name, 0) - (x.total_patients - initial_counts[x.name]),  # How many below target
-                    x.total_patients  # Then by total patients (lowest first)
-                ), reverse=True)  # Reverse so those furthest below target come first
-                
-                for physician in sorted_by_need:
-                    # CRITICAL: Skip new physicians - they should never be in sorted_physicians, but double-check
-                    if physician.is_new:
-                        continue
-                    
-                    if remaining_final <= 0:
-                        break
-                    target = target_total_gains.get(physician.name, 0)
-                    actual_gain = physician.total_patients - initial_counts[physician.name]
-                    needed = target - actual_gain
-                    
-                    if needed <= 0 or not can_take_patient(physician):
-                        continue
-                    
-                    # Try any available pool
-                    if n_A_new_patients > 0 and actual_gain < target:
-                        physician.add_patient()
-                        n_A_new_patients -= 1
-                        n_total_new_patients -= 1
-                        remaining_final -= 1
-                    elif n_B_new_patients > 0 and actual_gain < target:
-                        physician.add_patient()
-                        n_B_new_patients -= 1
-                        n_total_new_patients -= 1
-                        remaining_final -= 1
-                    elif n_N_new_patients > 0 and actual_gain < target:
-                        physician.add_patient()
-                        n_N_new_patients -= 1
-                        n_total_new_patients -= 1
-                        remaining_final -= 1
-                
-                # Safety check: Ensure no physician has exceeded their target
-                for physician in sorted_physicians:
-                    target = target_total_gains.get(physician.name, 0)
-                    actual_gain = physician.total_patients - initial_counts[physician.name]
-                    if actual_gain > target:
-                        # This shouldn't happen, but if it does, we've found a bug
-                        # In production, we might want to log this or handle it differently
-                        pass  # For now, just note it - the checks above should prevent this
+                if can_take_patient(physician):
+                    physician.add_patient()
+                    remaining -= 1
+                    print(f"    {physician.name}: +1, now at {physician.total_patients}")
+        
+        print(f"After distribution: remaining={remaining}")
+    
+    print(f"=== END ALLOCATION DEBUG ===\n")
+    
+    # ========== STEP-DOWN ALLOCATION ==========
+    # Step 1: Calculate "Gained + Traded" for each team (after regular allocation)
+    # Step 2: Calculate trades between teams
+    # Step 3: StepDown for Team A = (Gained + Traded for Team A) - (Traded B→A + Team A Pool)
+    # Step 4: Remaining StepDown goes to Team B and Team N
+    # Step 5: Allocate to physicians with lowest stepdown count (max 1 per physician)
+    
+    print(f"\n=== STEP-DOWN ALLOCATION ===")
+    print(f"Total step-down patients to allocate: {n_step_down_patients}")
+    
+    # Filter to only working physicians
+    working_team_A = [p for p in team_A if p.is_working]
+    working_team_B = [p for p in team_B if p.is_working]
+    working_team_N = [p for p in team_N if p.is_working]
+    
+    # Calculate gained for each physician (current total - initial total)
+    # Note: At this point, regular patients have been allocated
+    team_A_gained = sum(p.total_patients - initial_counts.get(p.name, p.total_patients) for p in working_team_A)
+    team_B_gained = sum(p.total_patients - initial_counts.get(p.name, p.total_patients) for p in working_team_B)
+    
+    # Calculate traded patients
+    traded_A_to_B = sum(p.traded_patients for p in working_team_B)  # B received from A
+    traded_B_to_A = sum(p.traded_patients for p in working_team_A)  # A received from B
+    
+    # Total "Gained + Traded" for each team
+    team_A_gained_plus_traded = team_A_gained + traded_B_to_A
+    team_B_gained_plus_traded = team_B_gained + traded_A_to_B
+    
+    print(f"Team A: Gained={team_A_gained}, Traded B→A={traded_B_to_A}, Total={team_A_gained_plus_traded}")
+    print(f"Team B: Gained={team_B_gained}, Traded A→B={traded_A_to_B}, Total={team_B_gained_plus_traded}")
+    print(f"Team A Pool: {n_A_new_patients}")
+    print(f"StepDown for A = {team_A_gained_plus_traded} - ({traded_B_to_A} + {n_A_new_patients}) = {team_A_gained_plus_traded - (traded_B_to_A + n_A_new_patients)}")
+    
+    # Calculate how many step-down patients Team A should get
+    # StepDown for Team A = (Gained + Traded for Team A) - (Traded B→A + Team A Pool)
+    stepdown_for_A = team_A_gained_plus_traded - (traded_B_to_A + n_A_new_patients)
+    stepdown_for_A = max(0, min(stepdown_for_A, n_step_down_patients))  # Clamp to valid range
+    
+    # Remaining goes to Team B and Team N
+    stepdown_for_B_and_N = n_step_down_patients - stepdown_for_A
+    
+    print(f"StepDown for Team A: {stepdown_for_A}")
+    print(f"StepDown for Team B and N: {stepdown_for_B_and_N}")
+    
+    # Allocate step-down to Team A (sorted by lowest stepdown count)
+    team_A_sorted = sorted(working_team_A, key=lambda x: initial_stepdown_counts.get(x.name, x.step_down_patients))
+    remaining_A = stepdown_for_A
+    
+    print(f"\nAllocating {remaining_A} step-down to Team A:")
+    for physician in team_A_sorted:
+        if remaining_A <= 0:
+            break
+        if can_take_step_down(physician):
+            physician.add_patient(is_step_down=True)
+            remaining_A -= 1
+            print(f"  {physician.name}: +1 stepdown, now at {physician.step_down_patients}")
+    
+    # Allocate step-down to Team B and Team N (combined, sorted by lowest stepdown count)
+    team_B_and_N = working_team_B + working_team_N
+    team_B_and_N_sorted = sorted(team_B_and_N, key=lambda x: initial_stepdown_counts.get(x.name, x.step_down_patients))
+    remaining_B_N = stepdown_for_B_and_N
+    
+    print(f"\nAllocating {remaining_B_N} step-down to Team B and N:")
+    for physician in team_B_and_N_sorted:
+        if remaining_B_N <= 0:
+            break
+        if can_take_step_down(physician):
+            physician.add_patient(is_step_down=True)
+            remaining_B_N -= 1
+            print(f"  {physician.name} (Team {physician.team}): +1 stepdown, now at {physician.step_down_patients}")
+    
+    print(f"\n=== END STEP-DOWN ALLOCATION ===\n")
     
     # Final verification: Ensure new physicians who started at/above new_start_number have gained 0 patients
     # This is a safety check to catch any bugs where new physicians incorrectly received patients
@@ -1342,6 +1049,13 @@ if run:
     # Store results in session state so they persist across reruns
     st.session_state["allocation_results"] = results_df.copy()
     st.session_state["total_new_patients_input"] = int(n_total_new_patients)  # Store for display
+    st.session_state["step_down_patients_input"] = int(n_step_down_patients)  # Store step-down input
+    # Store pool input parameters for allocation summary
+    st.session_state["pool_inputs"] = {
+        "team_a_pool": int(n_A_new_patients),
+        "team_b_pool": int(n_B_new_patients),
+        "team_n_pool": int(n_N_new_patients),
+    }
     
     # Calculate and store allocation details for debugging
     total_gained_calc = sum(p.total_patients - initial_counts[p.name] for p in working_physicians)
@@ -1381,6 +1095,7 @@ if run:
         "team_n_gained": team_n_gained,
         "team_a_stepdown_gained": sum(p.step_down_patients - initial_step_down_counts[p.name] for p in working_physicians if p.team == 'A'),
         "team_b_stepdown_gained": sum(p.step_down_patients - initial_step_down_counts[p.name] for p in working_physicians if p.team == 'B'),
+        "team_n_stepdown_gained": sum(p.step_down_patients - initial_step_down_counts[p.name] for p in working_physicians if p.team == 'N'),
         "team_a_traded": sum(p.traded_patients for p in working_physicians if p.team == 'A'),
         "team_b_traded": sum(p.traded_patients for p in working_physicians if p.team == 'B'),
         "total_traded": total_traded,
@@ -1431,8 +1146,8 @@ if "allocation_results" in st.session_state and st.session_state["allocation_res
             "Out of floor": st.column_config.NumberColumn("Out of floor", min_value=0, step=1, format="%d"),
             "Traded": st.column_config.NumberColumn("Traded", min_value=0, step=1, format="%d"),
             "Gained": st.column_config.NumberColumn("Gained", min_value=0, step=1, format="%d", disabled=True),
-            "Gained StepDown": st.column_config.NumberColumn("Gained StepDown", min_value=0, step=1, format="%d", disabled=True),
-            "Gained + Traded": st.column_config.NumberColumn("Gained + Traded", min_value=0, step=1, format="%d", disabled=True),
+            "Gained StepDown": st.column_config.NumberColumn("⭐ Gained StepDown", min_value=0, step=1, format="%d", disabled=True),
+            "Gained + Traded": st.column_config.NumberColumn("⭐ Gained + Traded", min_value=0, step=1, format="%d", disabled=True),
         },
         hide_index=True,
         use_container_width=True,
@@ -1440,13 +1155,188 @@ if "allocation_results" in st.session_state and st.session_state["allocation_res
         num_rows="fixed"
     )
     
+    # Display highlighted summary of key columns
+    st.markdown("#### ⭐ Key Metrics (Highlighted)")
+    highlight_df = display_df[["Physician Name", "Team", "Gained StepDown", "Gained + Traded"]].copy()
+    
+    def highlight_cols(x):
+        return ['background-color: #fff3cd; font-weight: bold' if col in ['Gained StepDown', 'Gained + Traded'] else '' for col in x.index]
+    
+    styled_df = highlight_df.style.apply(highlight_cols, axis=1)
+    st.dataframe(styled_df, use_container_width=True, hide_index=True)
+    
     # Update session state with edited results
     if not edited_results.equals(display_df):
         st.session_state["allocation_results"] = edited_results.copy()
     
+    # Add export and print options
+    st.markdown("---")
+    st.markdown("### 📄 Export & Print Options")
+    col_export1, col_export2, col_export3 = st.columns(3)
+    
+    with col_export1:
+        # Download CSV button
+        csv = edited_results.to_csv(index=False)
+        st.download_button(
+            label="📥 Download as CSV",
+            data=csv,
+            file_name=f"patient_allocation_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            mime="text/csv",
+            help="Download the results table as a CSV file that can be opened in Excel or printed"
+        )
+    
+    with col_export2:
+        # Show printable view
+        show_printable = st.button("🖨️ Show Printable View", help="Display a formatted, print-friendly version of the results")
+    
+    with col_export3:
+        # Copy to clipboard option (using text area that can be copied)
+        copy_text = st.button("📋 Copy to Clipboard", help="Generate text that can be easily copied")
+    
+    # Display printable view if requested
+    if show_printable:
+        st.markdown("---")
+        st.markdown("### 🖨️ Printable Results Table")
+        
+        # Create a nicely formatted HTML table
+        html_table = edited_results.to_html(index=False, classes='printable-table', table_id='results-table')
+        
+        # Add custom styling for printing
+        print_style = """
+        <style>
+        @media print {
+            body * {
+                visibility: hidden;
+            }
+            .printable-section, .printable-section * {
+                visibility: visible;
+            }
+            .printable-section {
+                position: absolute;
+                left: 0;
+                top: 0;
+                width: 100%;
+            }
+            table.printable-table {
+                border-collapse: collapse;
+                width: 100%;
+                font-size: 12pt;
+            }
+            table.printable-table th, table.printable-table td {
+                border: 1px solid #000;
+                padding: 8px;
+                text-align: left;
+            }
+            table.printable-table th {
+                background-color: #f0f0f0;
+                font-weight: bold;
+            }
+        }
+        .printable-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 11pt;
+        }
+        .printable-table th, .printable-table td {
+            border: 1px solid #ddd;
+            padding: 10px;
+            text-align: left;
+        }
+        .printable-table th {
+            background-color: #4CAF50;
+            color: white;
+            font-weight: bold;
+        }
+        .printable-table tr:nth-child(even) {
+            background-color: #f2f2f2;
+        }
+        .printable-table tr:hover {
+            background-color: #e8f5e9;
+        }
+        </style>
+        """
+        
+        st.markdown(print_style, unsafe_allow_html=True)
+        st.markdown(f'<div class="printable-section">{html_table}</div>', unsafe_allow_html=True)
+        
+        # Add print button - use Streamlit button that triggers JavaScript on next render
+        if 'trigger_print' not in st.session_state:
+            st.session_state.trigger_print = False
+        
+        print_btn = st.button("🖨️ Print This Page", key="print_page_btn",
+                             help="Click to open your browser's print dialog")
+        
+        if print_btn:
+            st.session_state.trigger_print = True
+            st.rerun()
+        
+        # Inject print JavaScript if button was clicked
+        if st.session_state.get('trigger_print', False):
+            st.markdown("""
+            <script>
+                setTimeout(function() {
+                    window.print();
+                }, 100);
+            </script>
+            """, unsafe_allow_html=True)
+            st.session_state.trigger_print = False  # Reset after triggering
+        
+        # Also add instructions
+        st.info("💡 **Tip:** Click the button above or use your browser's print function (Ctrl+P or Cmd+P) to print this page. The table above is optimized for printing.")
+    
+    # Display copy-friendly text view if requested
+    if copy_text:
+        st.markdown("---")
+        st.markdown("### 📋 Copy-Friendly Text View")
+        st.markdown("**Copy the text below:**")
+        
+        # Create a text representation
+        text_output = "PATIENT ALLOCATION RESULTS\n"
+        text_output += "=" * 80 + "\n\n"
+        
+        # Add summary if available
+        if "allocation_summary" in st.session_state:
+            summary = st.session_state["allocation_summary"]
+            text_output += "ALLOCATION SUMMARY\n"
+            text_output += "-" * 80 + "\n"
+            text_output += f"Team A Total Patients: {summary['team_a_total']}\n"
+            text_output += f"Team B Total Patients: {summary['team_b_total']}\n"
+            text_output += f"Team N Total Patients: {summary.get('team_n_total', 0)}\n"
+            text_output += f"Total Census: {summary['total_census']}\n"
+            text_output += f"Total Patients Gained: {summary['total_gained']}\n"
+            text_output += f"Total Traded: {summary.get('total_traded', 0)}\n\n"
+        
+        text_output += "PHYSICIAN DETAILS\n"
+        text_output += "-" * 80 + "\n"
+        
+        # Format table as text with proper column widths
+        col_widths = {}
+        for col in edited_results.columns:
+            # Calculate max width needed for this column
+            max_val_len = max(len(str(col)), edited_results[col].astype(str).str.len().max() if len(edited_results) > 0 else 0)
+            col_widths[col] = max(max_val_len + 2, 15)  # Minimum width of 15, add 2 for padding
+        
+        # Header row
+        for col in edited_results.columns:
+            text_output += f"{col:<{col_widths[col]}}"
+        text_output += "\n" + "-" * sum(col_widths.values()) + "\n"
+        
+        # Data rows
+        for _, row in edited_results.iterrows():
+            for col in edited_results.columns:
+                value = str(row[col]) if pd.notna(row[col]) else ""
+                text_output += f"{value:<{col_widths[col]}}"
+            text_output += "\n"
+        
+        st.text_area("Results (Select All and Copy)", text_output, height=400, key="copy_text_area")
+    
     # Calculate and display total gained patients and distribution
     if "allocation_results" in st.session_state and st.session_state["allocation_results"] is not None:
-        total_gained = display_df["Gained"].sum()
+        # Calculate total gained: just regular patients (step-down is already included in the pool)
+        total_gained_regular = display_df["Gained"].sum()
+        total_gained_stepdown = display_df["Gained StepDown"].sum()
+        total_gained = total_gained_regular  # Don't add step-down again, it's already in the pool
+        
         gain_counts = display_df["Gained"].value_counts().sort_index()
         expected_total = st.session_state.get("total_new_patients_input", 0)
         num_physicians_shown = len(display_df)
@@ -1455,40 +1345,38 @@ if "allocation_results" in st.session_state and st.session_state["allocation_res
         col_analysis1, col_analysis2 = st.columns(2)
         with col_analysis1:
             st.metric("Total Patients Gained (Sum)", int(total_gained))
+            st.caption(f"(Step-down tracked separately: {int(total_gained_stepdown)})")
             st.metric("Expected Total (Total New Patients)", int(expected_total))
             st.metric("Number of Physicians", int(num_physicians_shown))
-            # LOOKUP
-            # if total_gained != expected_total:
-            #     st.error(f"⚠️ Mismatch! Gained ({int(total_gained)}) ≠ Expected ({int(expected_total)})")
-            # else:
-            #     st.success("✅ Total gained matches expected!")
+            if total_gained != expected_total:
+                st.error(f"⚠️ Mismatch! Gained ({int(total_gained)}) ≠ Expected ({int(expected_total)})")
+            else:
+                st.success("✅ Total gained matches expected!")
         with col_analysis2:
             st.markdown("**Distribution by Gain Amount:**")
             for gain_amount in sorted(gain_counts.index):
                 count = int(gain_counts[gain_amount])
                 st.markdown(f"- **{count}** physician(s) gained **{int(gain_amount)}** patient(s)")
             
-            # LOOKUP
             # Show expected distribution calculation
-            # if expected_total > 0 and num_physicians_shown > 0:
-            #     st.markdown("---")
-            #     st.markdown("**Expected Distribution:**")
-            #     base_expected = expected_total // num_physicians_shown
-            #     remainder_expected = expected_total % num_physicians_shown
-            #     st.markdown(f"- Base: {base_expected} patients per physician")
-            #     st.markdown(f"- Remainder: {remainder_expected} physicians should get {base_expected + 1}")
-            #     st.markdown(f"- Rest: {num_physicians_shown - remainder_expected} physicians should get {base_expected}")
+            if expected_total > 0 and num_physicians_shown > 0:
+                st.markdown("---")
+                st.markdown("**Expected Distribution:**")
+                base_expected = expected_total // num_physicians_shown
+                remainder_expected = expected_total % num_physicians_shown
+                st.markdown(f"- Base: {base_expected} patients per physician")
+                st.markdown(f"- Remainder: {remainder_expected} physicians should get {base_expected + 1}")
+                st.markdown(f"- Rest: {num_physicians_shown - remainder_expected} physicians should get {base_expected}")
         
         # Show min and max gains
         min_gain = int(display_df["Gained"].min())
         max_gain = int(display_df["Gained"].max())
         gain_diff = max_gain - min_gain
         st.markdown(f"**Gain Range:** Minimum = {min_gain}, Maximum = {max_gain}, Difference = {gain_diff}")
-    # LOOKUP
-    #     if gain_diff > 1:
-    #         st.warning(f"⚠️ Gain difference is {gain_diff}, should be at most 1!")
-    # else:
-    #         st.success("✅ All gains differ by at most 1!")
+        if gain_diff > 1:
+            st.warning(f"⚠️ Gain difference is {gain_diff}, should be at most 1!")
+        else:
+            st.success("✅ All gains differ by at most 1!")
     
     # Display summary if it exists
     if "allocation_summary" in st.session_state:
@@ -1501,30 +1389,100 @@ if "allocation_results" in st.session_state and st.session_state["allocation_res
         
         st.markdown("### 📊 Allocation Summary")
         
+        # Add custom CSS for highlighted metrics
+        st.markdown("""
+        <style>
+        .highlight-metric {
+            background: linear-gradient(135deg, #fff3cd 0%, #ffeeba 100%);
+            border: 2px solid #ffc107;
+            border-radius: 10px;
+            padding: 10px;
+            margin-top: 10px;
+        }
+        .highlight-metric-label {
+            font-size: 14px;
+            font-weight: bold;
+            color: #856404;
+            margin-bottom: 5px;
+        }
+        .highlight-metric-value {
+            font-size: 28px;
+            font-weight: bold;
+            color: #856404;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+        
         # Team-specific information
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns(3)
         with col1:
             st.markdown("#### Team A")
             st.metric("Total Patients", summary["team_a_total"])
             st.metric("Total Patients Gained", summary["team_a_gained"])
             st.metric("Step Down Patients Gained", summary["team_a_stepdown_gained"])
-            st.metric("Total Patients Gained + Traded", team_a_gained_traded)
+            st.markdown(f"""
+            <div class="highlight-metric">
+                <div class="highlight-metric-label">⭐ Total Patients Gained + Traded</div>
+                <div class="highlight-metric-value">{int(team_a_gained_traded)}</div>
+            </div>
+            """, unsafe_allow_html=True)
         with col2:
             st.markdown("#### Team B")
             st.metric("Total Patients", summary["team_b_total"])
             st.metric("Total Patients Gained", summary["team_b_gained"])
             st.metric("Step Down Patients Gained", summary["team_b_stepdown_gained"])
-            st.metric("Total Patients Gained + Traded", team_b_gained_traded)
+            st.markdown(f"""
+            <div class="highlight-metric">
+                <div class="highlight-metric-label">⭐ Total Patients Gained + Traded</div>
+                <div class="highlight-metric-value">{int(team_b_gained_traded)}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        with col3:
+            st.markdown("#### Team N")
+            st.metric("Total Patients", summary.get("team_n_total", 0))
+            st.metric("Total Patients Gained", summary.get("team_n_gained", 0))
+            st.metric("Step Down Patients Gained", summary.get("team_n_stepdown_gained", 0))
+            team_n_gained_traded = summary.get("team_n_gained", 0)
+            st.markdown(f"""
+            <div class="highlight-metric">
+                <div class="highlight-metric-label">⭐ Total Patients Gained + Traded</div>
+                <div class="highlight-metric-value">{int(team_n_gained_traded)}</div>
+            </div>
+            """, unsafe_allow_html=True)
         
-        # Trade information
+        # Step-Down Calculation Breakdown
         st.markdown("---")
-        st.markdown("#### 🔄 Trade Summary")
-        col5, col6 = st.columns(2)
-        with col5:
-            st.metric("Patients Traded from Team A to Team B", trade_info['A_to_B'])
-        with col6:
-            st.metric("Patients Traded from Team B to Team A", trade_info['B_to_A'])
-            
+        st.markdown("### 🔢 Step-Down Calculation")
+        
+        # Get input values from Allocation Parameters (stored in pool_inputs)
+        pool_inputs = st.session_state.get("pool_inputs", {})
+        team_a_pool = pool_inputs.get("team_a_pool", 0)
+        total_stepdown = st.session_state.get("step_down_patients_input", 0)
+        traded_b_to_a = summary["team_b_traded"]  # Traded FROM B TO A
+        
+        # Calculate step-down allocation
+        # StepDown for Team A = (Gained + Traded for A) - (Traded B→A + Team A Pool)
+        stepdown_for_A = team_a_gained_traded - (traded_b_to_a + team_a_pool)
+        stepdown_for_A = max(0, min(stepdown_for_A, total_stepdown))  # Clamp to valid range
+        stepdown_for_B_N = total_stepdown - stepdown_for_A
+        
+        col_sd1, col_sd2 = st.columns(2)
+        with col_sd1:
+            st.markdown("**Calculation for Team A Step-Down:**")
+            st.markdown(f"- Team A Gained + Traded = {int(team_a_gained_traded)}")
+            st.markdown(f"- Traded B→A = {int(traded_b_to_a)}")
+            st.markdown(f"- Team A Pool = {int(team_a_pool)}")
+            raw_stepdown_A = team_a_gained_traded - (traded_b_to_a + team_a_pool)
+            st.markdown(f"- **StepDown for A** = {int(team_a_gained_traded)} - ({int(traded_b_to_a)} + {int(team_a_pool)})")
+            st.markdown(f"- **StepDown for A** = {int(team_a_gained_traded)} - {int(traded_b_to_a + team_a_pool)} = **{int(raw_stepdown_A)}**")
+            if raw_stepdown_A < 0:
+                st.info(f"ℹ️ Team A Pool ({int(team_a_pool)}) > Team A Gained + Traded ({int(team_a_gained_traded)}). All step-down patients go to Team B and N.")
+        with col_sd2:
+            st.markdown("**Step-Down Distribution:**")
+            st.metric("Team A Step-Down", int(stepdown_for_A))
+            st.metric("Team B + N Step-Down", int(stepdown_for_B_N))
+            st.markdown(f"Total: {int(stepdown_for_A)} + {int(stepdown_for_B_N)} = {int(total_stepdown)}")
+        
         # Overall census information
         st.markdown("---")
         col3, col4 = st.columns(2)
@@ -1539,245 +1497,60 @@ if "allocation_results" in st.session_state and st.session_state["allocation_res
             st.caption(f"Team A Gained ({summary['team_a_gained']}) + Team B Gained ({summary['team_b_gained']}) + "
                       f"Team N Gained ({summary.get('team_n_gained', 0)}) + Total Traded ({summary.get('total_traded', 0)}) = {summary['total_gained']}")
         
-
-        # Printable Summary Section
-    st.markdown("---")
-    st.markdown("### 🖨️ Printable Summary")
-    
-    show_print_summary = st.checkbox("Show Printable Summary", value=False, key="show_print_summary")
-    
-    if show_print_summary and "allocation_results" in st.session_state:
-        results_df = st.session_state["allocation_results"]
+        # Trade information
+        st.markdown("---")
+        st.markdown("#### 🔄 Trade Summary")
+        col5, col6 = st.columns(2)
+        with col5:
+            st.metric("Patients Traded from Team A to Team B", trade_info['A_to_B'])
+        with col6:
+            st.metric("Patients Traded from Team B to Team A", trade_info['B_to_A'])
         
-        # Create a clean summary DataFrame with the requested columns
-        print_summary_df = pd.DataFrame({
-            "Physician Name": results_df["Physician Name"],
-            "Team": results_df["Team"],
-            "Starting Patients": results_df["Original Total Patients"],
-            "Total StepDown": results_df["Original StepDown"],
-            "New StepDown": results_df["Gained StepDown"],
-            "New Patients (Total)": results_df["Gained"]
-        })
+        # Patient allocation summary by team (from pools + traded)
+        st.markdown("---")
+        st.markdown("#### 📋 Patient Allocation by Team")
+        st.markdown("**Summary of patients allocated to each team (from pools and traded):**")
         
-        # Sort by Team then by Physician Name for clean organization
-        print_summary_df = print_summary_df.sort_values(["Team", "Physician Name"]).reset_index(drop=True)
+        # Get pool input parameters (these are the actual pool sizes)
+        pool_inputs = st.session_state.get("pool_inputs", {})
+        team_a_pool_size = pool_inputs.get("team_a_pool", 0)
+        team_b_pool_size = pool_inputs.get("team_b_pool", 0)
+        team_n_pool_size = pool_inputs.get("team_n_pool", 0)
         
-        # Display the printable summary table
-        st.dataframe(print_summary_df, hide_index=True, use_container_width=True)
+        # "From Pool" should show how many patients from each pool were allocated
+        # Since we don't track this during allocation, we'll use the pool input sizes
+        # as these represent the total patients available in each pool
+        # The actual allocation may distribute these across teams, but for display purposes,
+        # we show the pool size as "From Pool" for the respective team
+        team_a_from_pool = team_a_pool_size
+        team_b_from_pool = team_b_pool_size
+        team_n_from_pool = team_n_pool_size
         
-        # Generate printable HTML content
-        from datetime import datetime
-        current_date = datetime.now().strftime('%Y-%m-%d %H:%M')
+        # Calculate total patients going to each team
+        # Total = From Pool + From Trade
+        patients_to_team_a = team_a_from_pool + trade_info['B_to_A']
+        patients_to_team_b = team_b_from_pool + trade_info['A_to_B']
+        patients_to_team_n = team_n_from_pool
         
-        # Build HTML table rows grouped by team
-        html_rows = ""
-        for team in sorted(print_summary_df["Team"].unique()):
-            team_df = print_summary_df[print_summary_df["Team"] == team]
-            
-            # Team header row
-            html_rows += f'<tr class="team-header"><td colspan="6">Team {team}</td></tr>'
-            
-            # Individual physician rows
-            for _, row in team_df.iterrows():
-                html_rows += f'''<tr>
-                    <td>{row['Physician Name']}</td>
-                    <td>{team}</td>
-                    <td>{int(row['Starting Patients'])}</td>
-                    <td>{int(row['Total StepDown'])}</td>
-                    <td>{int(row['New StepDown'])}</td>
-                    <td>{int(row['New Patients (Total)'])}</td>
-                </tr>'''
-            
-            # Team subtotals row
-            team_total_starting = int(team_df["Starting Patients"].sum())
-            team_total_stepdown = int(team_df["Total StepDown"].sum())
-            team_new_stepdown = int(team_df["New StepDown"].sum())
-            team_new_patients = int(team_df["New Patients (Total)"].sum())
-            html_rows += f'''<tr class="subtotal">
-                <td><strong>Team {team} Total</strong></td>
-                <td></td>
-                <td><strong>{team_total_starting}</strong></td>
-                <td><strong>{team_total_stepdown}</strong></td>
-                <td><strong>{team_new_stepdown}</strong></td>
-                <td><strong>{team_new_patients}</strong></td>
-            </tr>'''
-        
-        # Overall totals
-        overall_starting = int(print_summary_df['Starting Patients'].sum())
-        overall_stepdown = int(print_summary_df['Total StepDown'].sum())
-        overall_new_stepdown = int(print_summary_df['New StepDown'].sum())
-        overall_new_patients = int(print_summary_df['New Patients (Total)'].sum())
-        
-        html_rows += f'''<tr class="grand-total">
-            <td><strong>OVERALL TOTAL ({len(print_summary_df)} physicians)</strong></td>
-            <td></td>
-            <td><strong>{overall_starting}</strong></td>
-            <td><strong>{overall_stepdown}</strong></td>
-            <td><strong>{overall_new_stepdown}</strong></td>
-            <td><strong>{overall_new_patients}</strong></td>
-        </tr>'''
-        
-        # Complete HTML document for printing
-        print_html = f'''
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Patient Allocation Summary - {current_date}</title>
-            <style>
-                body {{
-                    font-family: Arial, sans-serif;
-                    margin: 20px;
-                    font-size: 12pt;
-                }}
-                h1 {{
-                    text-align: center;
-                    color: #333;
-                    margin-bottom: 5px;
-                }}
-                .date {{
-                    text-align: center;
-                    color: #666;
-                    margin-bottom: 20px;
-                }}
-                table {{
-                    width: 100%;
-                    border-collapse: collapse;
-                    margin-top: 10px;
-                }}
-                th, td {{
-                    border: 1px solid #333;
-                    padding: 8px 12px;
-                    text-align: left;
-                }}
-                th {{
-                    background-color: #4a90d9;
-                    color: white;
-                    font-weight: bold;
-                }}
-                tr:nth-child(even) {{
-                    background-color: #f9f9f9;
-                }}
-                .team-header {{
-                    background-color: #e8f4fd;
-                    font-weight: bold;
-                }}
-                .team-header td {{
-                    font-size: 14pt;
-                    padding: 10px;
-                }}
-                .subtotal {{
-                    background-color: #fff3cd;
-                }}
-                .grand-total {{
-                    background-color: #d4edda;
-                    font-size: 13pt;
-                }}
-                @media print {{
-                    body {{
-                        margin: 0;
-                        padding: 15px;
-                    }}
-                    h1 {{
-                        font-size: 16pt;
-                    }}
-                    table {{
-                        font-size: 10pt;
-                    }}
-                    th, td {{
-                        padding: 5px 8px;
-                    }}
-                }}
-            </style>
-        </head>
-        <body>
-            <h1>🩺 Patient Allocation Summary</h1>
-            <p class="date">{current_date}</p>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Physician Name</th>
-                        <th>Team</th>
-                        <th>Starting Patients</th>
-                        <th>Total StepDown</th>
-                        <th>New StepDown</th>
-                        <th>New Patients (Total)</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {html_rows}
-                </tbody>
-            </table>
-        </body>
-        </html>
-        '''
-        
-        # Escape the HTML for JavaScript
-        import html
-        escaped_html = html.escape(print_html).replace("'", "\\'").replace("\n", "\\n")
-        
-        # Create a button that opens a new window with the printable content
-        st.markdown(f'''
-        <button onclick="openPrintWindow()" style="
-            background-color: #4CAF50;
-            border: none;
-            color: white;
-            padding: 12px 24px;
-            text-align: center;
-            text-decoration: none;
-            display: inline-block;
-            font-size: 16px;
-            margin: 10px 0;
-            cursor: pointer;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-        ">
-            🖨️ Open Print Preview
-        </button>
-        <script>
-        function openPrintWindow() {{
-            var printContent = '{escaped_html}';
-            var printWindow = window.open('', '_blank', 'width=800,height=600');
-            printWindow.document.write(printContent.replace(/\\\\n/g, '\\n'));
-            printWindow.document.close();
-            setTimeout(function() {{
-                printWindow.print();
-            }}, 250);
-        }}
-        </script>
-        ''', unsafe_allow_html=True)
-        
-        # Also provide a text version for copying
-        st.markdown("#### 📋 Text Version (Copy)")
-        
-        # Build text summary
-        summary_lines = []
-        summary_lines.append(f"Patient Allocation Summary - {current_date}")
-        summary_lines.append("=" * 70)
-        summary_lines.append(f"{'Physician':<20} {'Team':<6} {'Start':<8} {'StepDn':<8} {'NewSD':<8} {'NewPts':<8}")
-        summary_lines.append("-" * 70)
-        
-        for team in sorted(print_summary_df["Team"].unique()):
-            team_df = print_summary_df[print_summary_df["Team"] == team]
-            summary_lines.append(f"TEAM {team}")
-            
-            for _, row in team_df.iterrows():
-                summary_lines.append(f"  {row['Physician Name']:<18} {team:<6} {int(row['Starting Patients']):<8} {int(row['Total StepDown']):<8} {int(row['New StepDown']):<8} {int(row['New Patients (Total)']):<8}")
-            
-            # Team subtotals
-            team_total_starting = int(team_df["Starting Patients"].sum())
-            team_total_stepdown = int(team_df["Total StepDown"].sum())
-            team_new_stepdown = int(team_df["New StepDown"].sum())
-            team_new_patients = int(team_df["New Patients (Total)"].sum())
-            summary_lines.append(f"  {'Team ' + team + ' Total:':<18} {'':<6} {team_total_starting:<8} {team_total_stepdown:<8} {team_new_stepdown:<8} {team_new_patients:<8}")
-            summary_lines.append("")
-        
-        summary_lines.append("=" * 70)
-        summary_lines.append(f"{'OVERALL TOTAL:':<26} {overall_starting:<8} {overall_stepdown:<8} {overall_new_stepdown:<8} {overall_new_patients:<8}")
-        summary_lines.append(f"Total Physicians: {len(print_summary_df)}")
-        summary_lines.append("=" * 70)
-        
-        summary_text = "\n".join(summary_lines)
-        st.code(summary_text, language=None)
+        col_alloc1, col_alloc2, col_alloc3 = st.columns(3)
+        with col_alloc1:
+            st.markdown("##### Team A")
+            st.metric("From Pool", team_a_from_pool)
+            st.metric("From Trade (B→A)", trade_info['B_to_A'])
+            st.markdown("---")
+            st.metric("**Total to Team A**", patients_to_team_a)
+        with col_alloc2:
+            st.markdown("##### Team B")
+            st.metric("From Pool", team_b_from_pool)
+            st.metric("From Trade (A→B)", trade_info['A_to_B'])
+            st.markdown("---")
+            st.metric("**Total to Team B**", patients_to_team_b)
+        with col_alloc3:
+            st.markdown("##### Team N")
+            st.metric("From Pool", team_n_from_pool)
+            st.metric("From Trade", 0)
+            st.markdown("---")
+            st.metric("**Total to Team N**", patients_to_team_n)
         
 # Handle structure changes and show info when no results exist  
 if "allocation_results" not in st.session_state or st.session_state["allocation_results"] is None:
@@ -1808,13 +1581,21 @@ st.markdown(
     .stDataFrame table {font-size: 1.08em;}
     .stButton>button {height: 2.7em; font-size:1.13em}
     .st-emotion-cache-ocqkz7 {background-color: #f6fbff}
-    /* Highlight and bold Gained StepDown and Gained + Traded columns */
-    div[data-testid="stDataEditor"] table th:has-text("Gained StepDown"),
-    div[data-testid="stDataEditor"] table th:has-text("Gained + Traded"),
-    div[data-testid="stDataEditor"] table td:nth-child(12),
-    div[data-testid="stDataEditor"] table td:nth-child(13) {
+    
+    /* Highlight Gained StepDown and Gained + Traded columns in results table */
+    /* Target the last two data columns (11th and 12th) */
+    div[data-testid="stDataEditor"] [data-testid="StyledDataGrid"] div[role="gridcell"]:nth-last-child(1),
+    div[data-testid="stDataEditor"] [data-testid="StyledDataGrid"] div[role="gridcell"]:nth-last-child(2) {
         background-color: #fff3cd !important;
         font-weight: bold !important;
+    }
+    
+    /* Also highlight column headers */
+    div[data-testid="stDataEditor"] [data-testid="StyledDataGrid"] div[role="columnheader"]:nth-last-child(1),
+    div[data-testid="stDataEditor"] [data-testid="StyledDataGrid"] div[role="columnheader"]:nth-last-child(2) {
+        background-color: #ffc107 !important;
+        font-weight: bold !important;
+        color: #000 !important;
     }
     </style>
     """,
