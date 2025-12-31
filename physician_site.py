@@ -1346,7 +1346,6 @@ if "allocation_results" in st.session_state and st.session_state["allocation_res
         with col_analysis1:
             st.metric("Total Patients Gained (Sum)", int(total_gained))
             st.caption(f"(Step-down tracked separately: {int(total_gained_stepdown)})")
-            st.metric("Expected Total (Total New Patients)", int(expected_total))
             st.metric("Number of Physicians", int(num_physicians_shown))
             if total_gained != expected_total:
                 st.error(f"⚠️ Mismatch! Gained ({int(total_gained)}) ≠ Expected ({int(expected_total)})")
@@ -1418,7 +1417,7 @@ if "allocation_results" in st.session_state and st.session_state["allocation_res
         with col1:
             st.markdown("#### Team A")
             st.metric("Total Patients", summary["team_a_total"])
-            st.metric("Total Patients Gained", summary["team_a_gained"])
+            st.metric("Total Patients Without Trade", summary["team_a_gained"])
             st.metric("Step Down Patients Gained", summary["team_a_stepdown_gained"])
             st.markdown(f"""
             <div class="highlight-metric">
@@ -1429,7 +1428,7 @@ if "allocation_results" in st.session_state and st.session_state["allocation_res
         with col2:
             st.markdown("#### Team B")
             st.metric("Total Patients", summary["team_b_total"])
-            st.metric("Total Patients Gained", summary["team_b_gained"])
+            st.metric("Total Patients Without Trade", summary["team_b_gained"])
             st.metric("Step Down Patients Gained", summary["team_b_stepdown_gained"])
             st.markdown(f"""
             <div class="highlight-metric">
@@ -1440,7 +1439,7 @@ if "allocation_results" in st.session_state and st.session_state["allocation_res
         with col3:
             st.markdown("#### Team N")
             st.metric("Total Patients", summary.get("team_n_total", 0))
-            st.metric("Total Patients Gained", summary.get("team_n_gained", 0))
+            st.metric("Total Patients Without Trade", summary.get("team_n_gained", 0))
             st.metric("Step Down Patients Gained", summary.get("team_n_stepdown_gained", 0))
             team_n_gained_traded = summary.get("team_n_gained", 0)
             st.markdown(f"""
@@ -1474,7 +1473,8 @@ if "allocation_results" in st.session_state and st.session_state["allocation_res
             st.markdown(f"- Team A Pool = {int(team_a_pool)}")
             raw_stepdown_A = team_a_gained_traded - (traded_b_to_a + team_a_pool)
             st.markdown(f"- **StepDown for A** = {int(team_a_gained_traded)} - ({int(traded_b_to_a)} + {int(team_a_pool)})")
-            st.markdown(f"- **StepDown for A** = {int(team_a_gained_traded)} - {int(traded_b_to_a + team_a_pool)} = **{int(raw_stepdown_A)}**")
+            display_stepdown_A = max(0, raw_stepdown_A)  # Show 0 if negative
+            st.markdown(f"- **StepDown for A** = {int(team_a_gained_traded)} - {int(traded_b_to_a + team_a_pool)} = **{int(display_stepdown_A)}**")
             if raw_stepdown_A < 0:
                 st.info(f"ℹ️ Team A Pool ({int(team_a_pool)}) > Team A Gained + Traded ({int(team_a_gained_traded)}). All step-down patients go to Team B and N.")
         with col_sd2:
