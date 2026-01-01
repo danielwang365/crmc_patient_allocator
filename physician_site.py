@@ -693,6 +693,35 @@ def allocate_patients(
 
 # --- Streamlit App Begins Here ---
 st.set_page_config(page_title="Patient Allocator", page_icon="🩺", layout="wide")
+
+# Password protection
+PASSWORD = "CRMCCHPG"
+
+# Initialize authentication in session state
+if "authenticated" not in st.session_state:
+    st.session_state["authenticated"] = False
+
+# Check if user is authenticated
+if not st.session_state["authenticated"]:
+    # Show password input form
+    st.title("🔒 Patient Allocator - Access Required")
+    st.markdown("---")
+    
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.markdown("### Please enter the password to continue")
+        password_input = st.text_input("Password", type="password", label_visibility="collapsed", placeholder="Enter password")
+        
+        if st.button("Login", use_container_width=True):
+            if password_input == PASSWORD:
+                st.session_state["authenticated"] = True
+                st.rerun()
+            else:
+                st.error("❌ Incorrect password. Please try again.")
+    
+    st.stop()  # Stop execution here if not authenticated
+
+# User is authenticated, show the main app
 st.title("🩺 Physician Patient Allocation")
 
 # Check current day of the week
@@ -1248,7 +1277,7 @@ if run:
     # Prepare results - only show working physicians, exclude Working column
     results_df = pd.DataFrame([
         {
-            "Physician Name": p.name,
+            "Physician Name": f"{p.name}{'*' if p.is_new else ''}",
             "Team": p.team,
             "New Physician": p.is_new,
             "Buffer": p.is_buffer,
@@ -1259,7 +1288,7 @@ if run:
             "Traded": p.traded_patients,
             "Gained": p.total_patients - initial_counts[p.name],
             "Gained StepDown": p.step_down_patients - initial_step_down_counts[p.name],
-            "Gained + Traded": p.traded_patients + (p.total_patients - initial_counts[p.name]),
+            "Gained + Traded": f"{p.total_patients - initial_counts[p.name]}{' + ' + str(p.traded_patients) if p.traded_patients > 0 else ''}",
         }
         for p in working_physicians
     ])
@@ -1369,7 +1398,7 @@ if "allocation_results" in st.session_state and st.session_state["allocation_res
             "Traded": st.column_config.NumberColumn("Traded", min_value=0, step=1, format="%d"),
             "Gained": st.column_config.NumberColumn("Gained", min_value=0, step=1, format="%d", disabled=True),
             "Gained StepDown": st.column_config.NumberColumn("⭐ Gained StepDown", min_value=0, step=1, format="%d", disabled=True),
-            "Gained + Traded": st.column_config.NumberColumn("⭐ Gained + Traded", min_value=0, step=1, format="%d", disabled=True),
+            "Gained + Traded": st.column_config.TextColumn("⭐ Gained + Traded", disabled=True),
         },
         hide_index=True,
         use_container_width=True,
@@ -1379,7 +1408,7 @@ if "allocation_results" in st.session_state and st.session_state["allocation_res
     
     # Display highlighted summary of key columns
     st.markdown("#### ⭐ Key Metrics (Highlighted)")
-    highlight_df = display_df[["Physician Name", "Team", "Gained + Traded", "Gained StepDown"]].copy()
+    highlight_df = display_df[["Physician Name", "Team", "Original Total Patients", "Gained + Traded", "Gained StepDown"]].copy()
     
     def highlight_cols(x):
         return ['background-color: #fff3cd; font-weight: bold' if col in ['Gained StepDown', 'Gained + Traded'] else '' for col in x.index]
@@ -1793,7 +1822,7 @@ if "allocation_results" in st.session_state and st.session_state["allocation_res
             # Get variables from session state or recalculate
             if "allocation_results" in st.session_state and st.session_state["allocation_results"] is not None:
                 print_display_df = st.session_state["allocation_results"].copy()
-                print_highlight_df = print_display_df[["Physician Name", "Team", "Gained + Traded", "Gained StepDown"]].copy()
+                print_highlight_df = print_display_df[["Physician Name", "Team", "Original Total Patients", "Gained + Traded", "Gained StepDown"]].copy()
                 # Sort by Team (A, B, N) then by Physician Name
                 print_highlight_df = print_highlight_df.sort_values(by=["Team", "Physician Name"], ascending=[True, True]).reset_index(drop=True)
                 print_total_gained_regular = print_display_df["Gained"].sum()
