@@ -1432,10 +1432,10 @@ if "allocation_results" in st.session_state and st.session_state["allocation_res
     if not edited_results.equals(display_df):
         st.session_state["allocation_results"] = edited_results.copy()
     
-    # Add export and print options
+    # Add export options
     st.markdown("---")
-    st.markdown("### 📄 Export & Print Options")
-    col_export1, col_export2, col_export3 = st.columns(3)
+    st.markdown("### 📄 Export Options")
+    col_export1, col_export2 = st.columns(2)
     
     with col_export1:
         # Download CSV button
@@ -1449,103 +1449,8 @@ if "allocation_results" in st.session_state and st.session_state["allocation_res
         )
     
     with col_export2:
-        # Show printable view
-        show_printable = st.button("🖨️ Show Printable View", help="Display a formatted, print-friendly version of the results")
-    
-    with col_export3:
         # Copy to clipboard option (using text area that can be copied)
         copy_text = st.button("📋 Copy to Clipboard", help="Generate text that can be easily copied")
-    
-    # Display printable view if requested
-    if show_printable:
-        st.markdown("---")
-        st.markdown("### 🖨️ Printable Results Table")
-        
-        # Create a nicely formatted HTML table
-        html_table = edited_results.to_html(index=False, classes='printable-table', table_id='results-table')
-        
-        # Add custom styling for printing
-        print_style = """
-        <style>
-        @media print {
-            body * {
-                visibility: hidden;
-            }
-            .printable-section, .printable-section * {
-                visibility: visible;
-            }
-            .printable-section {
-                position: absolute;
-                left: 0;
-                top: 0;
-                width: 100%;
-            }
-            table.printable-table {
-                border-collapse: collapse;
-                width: 100%;
-                font-size: 12pt;
-            }
-            table.printable-table th, table.printable-table td {
-                border: 1px solid #000;
-                padding: 8px;
-                text-align: left;
-            }
-            table.printable-table th {
-                background-color: #f0f0f0;
-                font-weight: bold;
-            }
-        }
-        .printable-table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 11pt;
-        }
-        .printable-table th, .printable-table td {
-            border: 1px solid #ddd;
-            padding: 10px;
-            text-align: left;
-        }
-        .printable-table th {
-            background-color: #4CAF50;
-            color: white;
-            font-weight: bold;
-        }
-        .printable-table tr:nth-child(even) {
-            background-color: #f2f2f2;
-        }
-        .printable-table tr:hover {
-            background-color: #e8f5e9;
-        }
-        </style>
-        """
-        
-        st.markdown(print_style, unsafe_allow_html=True)
-        st.markdown(f'<div class="printable-section">{html_table}</div>', unsafe_allow_html=True)
-        
-        # Add print button - use Streamlit button that triggers JavaScript on next render
-        if 'trigger_print' not in st.session_state:
-            st.session_state.trigger_print = False
-        
-        print_btn = st.button("🖨️ Print This Page", key="print_page_btn",
-                             help="Click to open your browser's print dialog")
-        
-        if print_btn:
-            st.session_state.trigger_print = True
-            st.rerun()
-        
-        # Inject print JavaScript if button was clicked
-        if st.session_state.get('trigger_print', False):
-            st.markdown("""
-            <script>
-                setTimeout(function() {
-                    window.print();
-                }, 100);
-            </script>
-            """, unsafe_allow_html=True)
-            st.session_state.trigger_print = False  # Reset after triggering
-        
-        # Also add instructions
-        st.info("💡 **Tip:** Click the button above or use your browser's print function (Ctrl+P or Cmd+P) to print this page. The table above is optimized for printing.")
     
     # Display copy-friendly text view if requested
     if copy_text:
