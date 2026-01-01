@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import os
 from datetime import datetime
@@ -1105,6 +1106,10 @@ if run:
 
 # Display results if they exist in session state
 if "allocation_results" in st.session_state and st.session_state["allocation_results"] is not None:
+    # Initialize print summary state
+    if "print_summary" not in st.session_state:
+        st.session_state["print_summary"] = False
+    
     st.markdown("### :clipboard: Results")
     
     # Explain how Total Patients is calculated
@@ -1157,7 +1162,7 @@ if "allocation_results" in st.session_state and st.session_state["allocation_res
     
     # Display highlighted summary of key columns
     st.markdown("#### ⭐ Key Metrics (Highlighted)")
-    highlight_df = display_df[["Physician Name", "Team", "Gained StepDown", "Gained + Traded"]].copy()
+    highlight_df = display_df[["Physician Name", "Team", "Gained + Traded", "Gained StepDown"]].copy()
     
     def highlight_cols(x):
         return ['background-color: #fff3cd; font-weight: bold' if col in ['Gained StepDown', 'Gained + Traded'] else '' for col in x.index]
@@ -1551,6 +1556,345 @@ if "allocation_results" in st.session_state and st.session_state["allocation_res
             st.metric("From Trade", 0)
             st.markdown("---")
             st.metric("**Total to Team N**", patients_to_team_n)
+        
+        # Print Summary button
+        st.markdown("---")
+        print_summary_btn = st.button("🖨️ Print Summary (Key Metrics + Analysis + Allocation)", 
+                                     use_container_width=True, 
+                                     type="primary",
+                                     help="Print Key Metrics, Gain Distribution Analysis, and Allocation Summary on one page")
+        
+        if print_summary_btn:
+            st.session_state["print_summary"] = True
+            st.rerun()
+        
+        # Display printable summary if button was clicked
+        if st.session_state.get("print_summary", False):
+            st.markdown("---")
+            st.markdown("### 🖨️ Printable Summary")
+            
+            # Get variables from session state or recalculate
+            if "allocation_results" in st.session_state and st.session_state["allocation_results"] is not None:
+                print_display_df = st.session_state["allocation_results"].copy()
+                print_highlight_df = print_display_df[["Physician Name", "Team", "Gained + Traded", "Gained StepDown"]].copy()
+                print_total_gained_regular = print_display_df["Gained"].sum()
+                print_total_gained_stepdown = print_display_df["Gained StepDown"].sum()
+                print_total_gained = print_total_gained_regular
+                print_gain_counts = print_display_df["Gained"].value_counts().sort_index()
+                print_expected_total = st.session_state.get("total_new_patients_input", 0)
+                print_num_physicians_shown = len(print_display_df)
+                print_min_gain = int(print_display_df["Gained"].min())
+                print_max_gain = int(print_display_df["Gained"].max())
+                print_gain_diff = print_max_gain - print_min_gain
+            else:
+                st.error("No allocation results available for printing.")
+                st.session_state["print_summary"] = False
+                st.stop()
+            
+            # Create printable HTML content
+            print_html = """
+            <style>
+            @media print {
+                body * {
+                    visibility: hidden;
+                }
+                .printable-summary, .printable-summary * {
+                    visibility: visible;
+                }
+                .printable-summary {
+                    position: absolute;
+                    left: 0;
+                    top: 0;
+                    width: 100%;
+                }
+            }
+            .printable-summary {
+                font-family: Arial, sans-serif;
+                padding: 10px;
+                font-size: 11pt;
+            }
+            .printable-summary h2 {
+                color: #333;
+                border-bottom: 2px solid #333;
+                padding-bottom: 5px;
+                margin-top: 15px;
+                margin-bottom: 10px;
+                font-size: 16pt;
+            }
+            .printable-summary h3 {
+                color: #555;
+                margin-top: 12px;
+                margin-bottom: 8px;
+                font-size: 13pt;
+            }
+            .printable-summary h4 {
+                margin-top: 8px;
+                margin-bottom: 5px;
+                font-size: 11pt;
+            }
+            .printable-summary table {
+                width: 100%;
+                border-collapse: collapse;
+                margin: 8px 0;
+                font-size: 10pt;
+            }
+            /* Make Key Metrics table text bigger for easier reading */
+            .printable-summary h2:first-of-type + table.printable-table,
+            .printable-summary h2:contains("Key Metrics") + table.printable-table {
+                font-size: 12pt !important;
+            }
+            /* Alternative selector for Key Metrics table */
+            .printable-summary table.printable-table:first-of-type {
+                font-size: 12pt !important;
+            }
+            .printable-summary table.printable-table:first-of-type th,
+            .printable-summary table.printable-table:first-of-type td {
+                font-size: 12pt !important;
+                padding: 6px !important;
+            }
+            .printable-summary th, .printable-summary td {
+                border: 1px solid #ddd;
+                padding: 5px;
+                text-align: left;
+            }
+            /* Make Key Metrics table columns tighter, especially last two columns (Gained + Traded and Gained StepDown) */
+            .printable-summary table.printable-table th:nth-last-child(1),
+            .printable-summary table.printable-table td:nth-last-child(1),
+            .printable-summary table.printable-table th:nth-last-child(2),
+            .printable-summary table.printable-table td:nth-last-child(2) {
+                width: auto;
+                min-width: 60px;
+                max-width: 70px;
+                white-space: nowrap;
+            }
+            .printable-summary table.printable-table th:first-child,
+            .printable-summary table.printable-table td:first-child {
+                width: auto;
+                min-width: 120px;
+            }
+            .printable-summary table.printable-table th:nth-child(2),
+            .printable-summary table.printable-table td:nth-child(2) {
+                width: auto;
+                min-width: 60px;
+            }
+            .printable-summary th {
+                background-color: #4CAF50;
+                color: white;
+                font-weight: bold;
+            }
+            .printable-summary tr:nth-child(even) {
+                background-color: #f2f2f2;
+            }
+            .printable-summary p {
+                margin: 5px 0;
+            }
+            .printable-summary ul {
+                margin: 5px 0;
+                padding-left: 20px;
+            }
+            .highlight-cell {
+                background-color: #fff3cd !important;
+                font-weight: bold !important;
+            }
+            .metric-box {
+                border: 2px solid #ffc107;
+                background: linear-gradient(135deg, #fff3cd 0%, #ffeeba 100%);
+                padding: 8px;
+                margin: 5px 0;
+                border-radius: 3px;
+            }
+            </style>
+            <div class="printable-summary">
+            """
+            
+            # Add Key Metrics
+            print_html += "<h2>⭐ Key Metrics</h2>"
+            print_html += print_highlight_df.to_html(index=False, classes='printable-table')
+            print_html += "<br>"
+            
+            # Add Gain Distribution Analysis (condensed)
+            print_html += "<h2>📈 Gain Distribution Analysis</h2>"
+            print_html += f"<p><strong>Total Gained:</strong> {int(print_total_gained)} | <strong>Step-down:</strong> {int(print_total_gained_stepdown)} | <strong>Physicians:</strong> {int(print_num_physicians_shown)}</p>"
+            print_html += "<p><strong>Distribution:</strong> "
+            dist_list = []
+            for gain_amount in sorted(print_gain_counts.index):
+                count = int(print_gain_counts[gain_amount])
+                dist_list.append(f"{count} physician(s) gained {int(gain_amount)}")
+            print_html += " | ".join(dist_list) + "</p>"
+            
+            if print_expected_total > 0 and print_num_physicians_shown > 0:
+                base_expected = print_expected_total // print_num_physicians_shown
+                remainder_expected = print_expected_total % print_num_physicians_shown
+                print_html += f"<p><strong>Expected:</strong> Base = {base_expected} | {remainder_expected} get {base_expected + 1} | {print_num_physicians_shown - remainder_expected} get {base_expected}</p>"
+            
+            # Recalculate values for print
+            print_team_a_gained_traded = summary["team_a_gained"] + summary["team_b_traded"]
+            print_team_b_gained_traded = summary["team_b_gained"] + summary["team_a_traded"]
+            print_team_n_gained_traded = summary.get("team_n_gained", 0)
+            print_trade_info = {'A_to_B': summary["team_a_traded"], 'B_to_A': summary["team_b_traded"]}
+            
+            # Add Allocation Summary (condensed table format)
+            print_html += "<h2>📊 Allocation Summary</h2>"
+            print_html += "<table style='width:100%; margin-top:10px;'>"
+            print_html += "<tr><th>Team</th><th>Gained (No Trade)</th><th>Step Down Gained</th><th>⭐ Gained + Traded</th></tr>"
+            print_html += f"<tr><td><strong>Team A</strong></td><td>{summary['team_a_gained']}</td><td>{summary['team_a_stepdown_gained']}</td><td style='background-color:#fff3cd; font-weight:bold;'>{int(print_team_a_gained_traded)}</td></tr>"
+            print_html += f"<tr><td><strong>Team B</strong></td><td>{summary['team_b_gained']}</td><td>{summary['team_b_stepdown_gained']}</td><td style='background-color:#fff3cd; font-weight:bold;'>{int(print_team_b_gained_traded)}</td></tr>"
+            print_html += f"<tr><td><strong>Team N</strong></td><td>{summary.get('team_n_gained', 0)}</td><td>{summary.get('team_n_stepdown_gained', 0)}</td><td style='background-color:#fff3cd; font-weight:bold;'>{int(print_team_n_gained_traded)}</td></tr>"
+            print_html += "</table>"
+            
+            # Overall census (condensed)
+            print_html += "<h3>Overall Summary</h3>"
+            print_html += f"<p><strong>Total Census:</strong> {summary['total_census']}</p>"
+            print_html += f"<p><strong>Total Patients Gained from Yesterday:</strong> {summary['total_gained']}</p>"
+            
+            print_html += "</div>"
+            
+            # Display the printable content
+            st.markdown(print_html, unsafe_allow_html=True)
+            
+            # Add print instructions and download option
+            st.markdown("---")
+            st.markdown("### 🖨️ Print Options")
+            
+            col_btn1, col_btn2, col_btn3 = st.columns(3)
+            
+            with col_btn1:
+                # Download as HTML file that can be printed
+                html_content = f"""
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <title>Patient Allocation Summary</title>
+                    <style>
+                        @media print {{
+                            body * {{
+                                visibility: hidden;
+                            }}
+                            .printable-summary, .printable-summary * {{
+                                visibility: visible;
+                            }}
+                            .printable-summary {{
+                                position: absolute;
+                                left: 0;
+                                top: 0;
+                                width: 100%;
+                            }}
+                        }}
+                        body {{
+                            font-family: Arial, sans-serif;
+                            padding: 20px;
+                        }}
+                        .printable-summary {{
+                            font-family: Arial, sans-serif;
+                            padding: 20px;
+                        }}
+                        .printable-summary h2 {{
+                            color: #333;
+                            border-bottom: 2px solid #333;
+                            padding-bottom: 10px;
+                        }}
+                        .printable-summary h3 {{
+                            color: #555;
+                            margin-top: 20px;
+                        }}
+                        .printable-summary table {{
+                            width: 100%;
+                            border-collapse: collapse;
+                            margin: 15px 0;
+                        }}
+                        /* Make Key Metrics table text bigger for easier reading */
+                        .printable-summary table.printable-table:first-of-type {{
+                            font-size: 12pt !important;
+                        }}
+                        .printable-summary table.printable-table:first-of-type th,
+                        .printable-summary table.printable-table:first-of-type td {{
+                            font-size: 12pt !important;
+                            padding: 6px !important;
+                        }}
+                        .printable-summary th, .printable-summary td {{
+                            border: 1px solid #ddd;
+                            padding: 8px;
+                            text-align: left;
+                        }}
+                        .printable-summary th {{
+                            background-color: #4CAF50;
+                            color: white;
+                            font-weight: bold;
+                        }}
+                        .printable-summary tr:nth-child(even) {{
+                            background-color: #f2f2f2;
+                        }}
+                        /* Make Key Metrics table columns tighter, especially last two columns (Gained + Traded and Gained StepDown) */
+                        .printable-summary table.printable-table th:nth-last-child(1),
+                        .printable-summary table.printable-table td:nth-last-child(1),
+                        .printable-summary table.printable-table th:nth-last-child(2),
+                        .printable-summary table.printable-table td:nth-last-child(2) {{
+                            width: auto;
+                            min-width: 60px;
+                            max-width: 70px;
+                            white-space: nowrap;
+                        }}
+                        .printable-summary table.printable-table th:first-child,
+                        .printable-summary table.printable-table td:first-child {{
+                            width: auto;
+                            min-width: 120px;
+                        }}
+                        .printable-summary table.printable-table th:nth-child(2),
+                        .printable-summary table.printable-table td:nth-child(2) {{
+                            width: auto;
+                            min-width: 60px;
+                        }}
+                        .metric-box {{
+                            border: 2px solid #ffc107;
+                            background: linear-gradient(135deg, #fff3cd 0%, #ffeeba 100%);
+                            padding: 15px;
+                            margin: 10px 0;
+                            border-radius: 5px;
+                        }}
+                        .print-btn {{
+                            text-align: center;
+                            margin: 20px 0;
+                        }}
+                        button {{
+                            background-color: #4CAF50;
+                            color: white;
+                            padding: 12px 24px;
+                            font-size: 16px;
+                            font-weight: bold;
+                            border: none;
+                            border-radius: 5px;
+                            cursor: pointer;
+                        }}
+                    </style>
+                </head>
+                <body>
+                    {print_html}
+                    <div class="print-btn">
+                        <button onclick="window.print()">🖨️ Print This Page</button>
+                    </div>
+                </body>
+                </html>
+                """
+                st.download_button(
+                    label="📥 Download HTML for Printing",
+                    data=html_content,
+                    file_name=f"allocation_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html",
+                    mime="text/html",
+                    use_container_width=True,
+                    help="Download an HTML file that you can open in your browser and print"
+                )
+            
+            with col_btn2:
+                st.markdown("**Or use keyboard shortcut:**")
+                st.markdown("**Ctrl+P** (Windows/Linux)  \n**Cmd+P** (Mac)")
+                st.markdown("*(While viewing the content above)*")
+            
+            with col_btn3:
+                if st.button("❌ Close Print View", key="close_print_btn", use_container_width=True):
+                    st.session_state["print_summary"] = False
+                    st.rerun()
+            
+            st.info("💡 **Tip:** The content above is optimized for printing. **Option 1:** Download the HTML file and open it in your browser to print. **Option 2:** Press **Ctrl+P** (Windows) or **Cmd+P** (Mac) while viewing the content above.")
         
 # Handle structure changes and show info when no results exist  
 if "allocation_results" not in st.session_state or st.session_state["allocation_results"] is None:
