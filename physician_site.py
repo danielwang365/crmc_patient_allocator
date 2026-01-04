@@ -616,11 +616,11 @@ with st.sidebar:
 
 # Default master list of all possible physicians
 DEFAULT_MASTER_LIST = [
-    "Adhiakha", "Wang", "Jaini", "JemJem", "Batth",
+    "Adhlakha", "Wang", "Jaini", "JemJem", "Batth",
     "Rajarathinam", "Shehata", "Yousef", "Aung", "Bhogireddy",
-    "Souliman", "Zaidi", "Attrapisi", "Ali", "Batlawala",
+    "Souliman", "Zaidi", "Attraplsi", "Ali", "Batlawala",
     "Sakkalaek", "Shirani", "Oladipo", "Abadi", "Kaur",
-    "Narra", "Suman", "Win", "Das", "Alchi", "Reddy",
+    "Narra", "Suman", "Lwin", "Das", "Alchi", "Reddy",
     "Hung", "Nwadei", "Lamba", "Ahir", "Mahajan", "Abukraa",
     "Keralos", "Nibber"
 ]
