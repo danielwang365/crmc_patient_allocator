@@ -1,8 +1,6 @@
 import streamlit as st
-import streamlit.components.v1 as components
 import pandas as pd
 import os
-import json
 from datetime import datetime
 
 # Files for persistent storage
@@ -305,188 +303,87 @@ def allocate_patients(
         # DO NOT check total patients for step-down allocation
         return gained_stepdown < 1
     
-    # Check if it's Wednesday
-    current_date = datetime.now()
-    is_wednesday = current_date.strftime("%A") == "Wednesday"
+    # ========== NEW ALLOCATION LOGIC ==========
+    # Step 1: Calculate total patients to distribute
+    # Total = Team A Pool + Team B Pool + Team N Pool + Step Down (trades added separately)
+    total_to_distribute = n_A_new_patients + n_B_new_patients + n_N_new_patients + n_step_down_patients
     
     print(f"\n=== ALLOCATION DEBUG ===")
-    print(f"Today is: {current_date.strftime('%A, %B %d, %Y')}")
-    print(f"Is Wednesday: {is_wednesday}")
+    print(f"Team A Pool: {n_A_new_patients}")
+    print(f"Team B Pool: {n_B_new_patients}")
+    print(f"Team N Pool: {n_N_new_patients}")
+    print(f"Step Down: {n_step_down_patients}")
+    print(f"Total to distribute: {total_to_distribute}")
     
-    # ========== WEDNESDAY ALLOCATION LOGIC ==========
-    if is_wednesday:
-        # Wednesday: Simple round-robin distribution
-        # GOAL: Treat all physicians as starting at 0, distribute total patients equally
-        # IMPORTANT: Wednesday uses COMPLETELY DIFFERENT logic
-        # - NO new_start_number constraint
-        # - NO minimum_patients constraint
-        # - Only maximum_patients constraint applies (via can_take_patient)
-        
-        print(f"\n=== WEDNESDAY ALLOCATION ===")
-        print(f"Team A Pool: {n_A_new_patients}")
-        print(f"Team B Pool: {n_B_new_patients}")
-        print(f"Team N Pool: {n_N_new_patients}")
-        print(f"Step Down: {n_step_down_patients}")
-        
-        # Get all working physicians
-        all_working = [p for p in physicians if p.is_working]
-        num_working = len(all_working)
-        
-        if num_working > 0:
-            # Step 1: Calculate total_all_patients = current_total + new_regular + stepdown
-            total_current_patients = sum(p.total_patients for p in all_working)
-            regular_patients = n_A_new_patients + n_B_new_patients + n_N_new_patients
-            total_all_patients = total_current_patients + regular_patients + n_step_down_patients
-            
-            print(f"Total current patients: {total_current_patients}")
-            print(f"Regular patients (A+B+N): {regular_patients}")
-            print(f"Step Down patients: {n_step_down_patients}")
-            print(f"Total all patients: {total_all_patients}")
-            print(f"Number of working physicians: {num_working}")
-            
-            # Step 2: Reset all physicians to 0 (as if they all started with no patients)
-            for physician in all_working:
-                physician.set_total_patients(0)
-            
-            print(f"\nReset all physicians to 0 total patients")
-            
-            # Step 3: Separate into non-new and new physicians for priority
-            non_new_physicians = [p for p in all_working if not p.is_new]
-            new_physicians = [p for p in all_working if p.is_new]
-            
-            print(f"Non-new physicians: {len(non_new_physicians)}, New physicians: {len(new_physicians)}")
-            
-            # Step 4: Simple round-robin distribution
-            # Give +1 to all physicians who can take a patient, repeat until out of patients
-            remaining_patients = total_all_patients
-            round_num = 0
-            
-            while remaining_patients > 0:
-                round_num += 1
-                patients_given_this_round = 0
-                
-                # Full round: give +1 to all physicians who can take a patient
-                # Priority: non-new first, then new
-                for physician in non_new_physicians + new_physicians:
-                    if remaining_patients <= 0:
-                        break
-                    if can_take_patient(physician):
-                        physician.add_patient()
-                        remaining_patients -= 1
-                        patients_given_this_round += 1
-                
-                # If we couldn't give any patients this round, break
-                if patients_given_this_round == 0:
-                    print(f"  Round {round_num}: No more patients can be given (remaining: {remaining_patients})")
-                    break
-                else:
-                    if round_num <= 5 or round_num % 10 == 0:  # Log first 5 and every 10th
-                        print(f"  Round {round_num}: Gave +1 to {patients_given_this_round} physicians ({remaining_patients} remaining)")
-            
-            # Print final results
-            print(f"\nFinal allocation results:")
-            final_totals = [p.total_patients for p in all_working]
-            min_total = min(final_totals)
-            max_total = max(final_totals)
-            variance = max_total - min_total
-            
-            # Sort by Team (A, B, N) then by total patients
-            for physician in sorted(all_working, key=lambda x: (x.team, x.total_patients)):
-                print(f"  {physician.name} (Team {physician.team}): {physician.total_patients} (is_new={physician.is_new})")
-            
-            print(f"\nFinal variance: {variance} (min={min_total}, max={max_total}, should be <= 1)")
-            print(f"Remaining patients: {remaining_patients}")
-        
-        # Continue to step-down allocation (same as regular days) - will run after this block
-        print(f"\n=== END WEDNESDAY REGULAR ALLOCATION ===\n")
+    # Step 2: Get all working physicians and sort by total patients (low to high)
+    all_working = [p for p in physicians if p.is_working]
+    all_working.sort(key=lambda x: x.total_patients)
     
-    # ========== REGULAR ALLOCATION LOGIC (Non-Wednesday) ==========
-    else:
-        # Step 1: Calculate total patients to distribute
-        # Total = Team A Pool + Team B Pool + Step Down (trades added separately)
-        total_to_distribute = n_A_new_patients + n_B_new_patients + n_step_down_patients
+    print(f"All working physicians (sorted by total, low to high):")
+    for p in all_working:
+        print(f"  {p.name}: total={p.total_patients}, is_new={p.is_new}")
+    
+    remaining = total_to_distribute
+    
+    # Step 3: Allocate to new physicians until they reach new_start_number
+    # Do NOT include them in the general distribution afterward
+    new_physicians = [p for p in all_working if p.is_new]
+    print(f"\nStep 3: New physician allocation (new_start_number={new_start_number})")
+    for physician in new_physicians:
+        if physician.total_patients >= new_start_number:
+            print(f"  {physician.name}: already at {physician.total_patients}, skip")
+            continue
+        needed = new_start_number - physician.total_patients
+        to_give = min(needed, remaining)
+        for _ in range(to_give):
+            physician.add_patient()
+            remaining -= 1
+        print(f"  {physician.name}: gave {to_give}, now at {physician.total_patients}")
+    
+    # Step 4: Get non-new physicians for general distribution
+    non_new = [p for p in all_working if not p.is_new]
+    num_non_new = len(non_new)
+    
+    # Track allocation order for minimum check function (most recent first when reversed)
+    # This tracks which physicians received patients during round-robin allocation
+    allocation_order = []
+    
+    print(f"\nStep 4: General distribution (round-robin)")
+    print(f"Non-new physicians: {num_non_new}")
+    print(f"Remaining patients: {remaining}")
+    
+    if remaining > 0 and num_non_new > 0:
+        round_num = 0
         
-        print(f"Team A Pool: {n_A_new_patients}")
-        print(f"Team B Pool: {n_B_new_patients}")
-        print(f"Step Down: {n_step_down_patients}")
-        print(f"Total to distribute: {total_to_distribute}")
-        
-        # Step 2: Get all working physicians and sort by total patients (low to high)
-        all_working = [p for p in physicians if p.is_working]
-        all_working.sort(key=lambda x: x.total_patients)
-        
-        print(f"All working physicians (sorted by total, low to high):")
-        for p in all_working:
-            print(f"  {p.name}: total={p.total_patients}, is_new={p.is_new}")
-        
-        remaining = total_to_distribute
-        
-        # Step 3: Allocate to new physicians until they reach new_start_number
-        # Do NOT include them in the general distribution afterward
-        new_physicians = [p for p in all_working if p.is_new]
-        print(f"\nStep 3: New physician allocation (new_start_number={new_start_number})")
-        for physician in new_physicians:
-            if physician.total_patients >= new_start_number:
-                print(f"  {physician.name}: already at {physician.total_patients}, skip")
-                continue
-            needed = new_start_number - physician.total_patients
-            to_give = min(needed, remaining)
-            for _ in range(to_give):
-                physician.add_patient()
-                remaining -= 1
-            print(f"  {physician.name}: gave {to_give}, now at {physician.total_patients}")
-        
-        # Step 4: Get non-new physicians for general distribution
-        non_new = [p for p in all_working if not p.is_new]
-        num_non_new = len(non_new)
-        
-        print(f"\nStep 4: General distribution (round-robin)")
-        print(f"Non-new physicians: {num_non_new}")
-        print(f"Remaining patients: {remaining}")
-        
-        if remaining > 0 and num_non_new > 0:
-            round_num = 0
-            
-            # Round-robin: while remaining >= num_non_new, give +1 to ALL non-new physicians
-            while remaining >= num_non_new:
-                round_num += 1
-                print(f"  Round {round_num}: giving +1 to all {num_non_new} physicians")
-                for physician in non_new:
-                    if can_take_patient(physician):
-                        physician.add_patient()
-                        remaining -= 1
-            
-            print(f"  After full rounds: remaining={remaining}")
-            
-            # Now remaining < num_non_new
-            # First, give to physicians below minimum
-            if remaining > 0:
-                below_min = [p for p in non_new if p.total_patients < minimum_patients and can_take_patient(p)]
-                below_min.sort(key=lambda x: x.total_patients)  # Lowest first
-                
-                print(f"  Physicians below minimum ({minimum_patients}): {len(below_min)}")
-                for physician in below_min:
-                    if remaining <= 0:
-                        break
+        # Round-robin: while remaining >= num_non_new, give +1 to ALL non-new physicians
+        while remaining >= num_non_new:
+            round_num += 1
+            print(f"  Round {round_num}: giving +1 to all {num_non_new} physicians")
+            for physician in non_new:
+                if can_take_patient(physician):
                     physician.add_patient()
                     remaining -= 1
-                    print(f"    {physician.name}: +1 (below min), now at {physician.total_patients}")
-            
-            # Then, give remaining to physicians with lowest totals
-            if remaining > 0:
-                non_new.sort(key=lambda x: x.total_patients)  # Re-sort by current totals
-                print(f"  Distributing final {remaining} patients to lowest totals:")
-                for physician in non_new:
-                    if remaining <= 0:
-                        break
-                    if can_take_patient(physician):
-                        physician.add_patient()
-                        remaining -= 1
-                        print(f"    {physician.name}: +1, now at {physician.total_patients}")
-            
-            print(f"After distribution: remaining={remaining}")
+                    allocation_order.append(physician)  # Track allocation order
         
-        print(f"=== END REGULAR ALLOCATION DEBUG ===\n")
+        print(f"  After full rounds: remaining={remaining}")
+        
+        # Now remaining < num_non_new
+        # Give remaining to physicians with lowest totals (for even distribution)
+        if remaining > 0:
+            non_new.sort(key=lambda x: x.total_patients)  # Re-sort by current totals
+            print(f"  Distributing final {remaining} patients to lowest totals:")
+            for physician in non_new:
+                if remaining <= 0:
+                    break
+                if can_take_patient(physician):
+                    physician.add_patient()
+                    remaining -= 1
+                    allocation_order.append(physician)  # Track allocation order
+                    print(f"    {physician.name}: +1, now at {physician.total_patients}")
+        
+        print(f"After distribution: remaining={remaining}")
+    
+    print(f"=== END ALLOCATION DEBUG ===\n")
     
     # ========== STEP-DOWN ALLOCATION ==========
     # Step 1: Calculate "Gained + Traded" for each team (after regular allocation)
@@ -563,120 +460,87 @@ def allocate_patients(
     
     # Final verification: Ensure new physicians who started at/above new_start_number have gained 0 patients
     # This is a safety check to catch any bugs where new physicians incorrectly received patients
-    # SKIP THIS VERIFICATION ON WEDNESDAY - Wednesday doesn't use new_start_number
-    if not is_wednesday:
-        for physician in physicians:
-            if physician.is_new:
-                initial_total = initial_counts.get(physician.name, physician.total_patients)
-                current_total = physician.total_patients
-                gained = current_total - initial_total
-                
-                # If physician was already at or above new_start_number initially, they should have gained 0
-                if initial_total >= new_start_number:
-                    if gained > 0:
-                        # BUG DETECTED: New physician at new_start_number got patients they shouldn't have
-                        # Reset them to their initial total (they should have gained 0)
-                        excess = gained
-                        for _ in range(excess):
-                            physician.remove_patient()
-                        # Force their total to be exactly what it should be (no gain)
-                        physician.set_total_patients(initial_total)
-                    # If gained == 0, that's correct - they should get 0 patients
-                # If initial_total < new_start_number, they should have gained to reach new_start_number
-                # (This is handled in the "Third" phase above)
-        
-        # Check if any physicians are below minimum_patients and redistribute if needed
-        print(f"\n=== MINIMUM PATIENTS CHECK ===")
-        all_working = [p for p in physicians if p.is_working]
-        below_minimum = [p for p in all_working if p.total_patients < minimum_patients]
-        
-        if below_minimum:
-            print(f"Found {len(below_minimum)} physicians below minimum ({minimum_patients}):")
-            for p in below_minimum:
-                print(f"  {p.name} (Team {p.team}): {p.total_patients} patients")
+    for physician in physicians:
+        if physician.is_new:
+            initial_total = initial_counts.get(physician.name, physician.total_patients)
+            current_total = physician.total_patients
+            gained = current_total - initial_total
             
-            # Calculate total shortfall
-            total_shortfall = sum(minimum_patients - p.total_patients for p in below_minimum)
-            print(f"Total shortfall: {total_shortfall} patients")
-            
-            # Find non-new physicians who gained the most patients (sorted by gained descending)
-            # Exclude physicians who are at or below minimum (they can't afford to lose patients)
-            non_new_working = [p for p in all_working if not p.is_new]
-            physicians_with_gains = []
-            for p in non_new_working:
-                # Only consider physicians who are above minimum (can afford to lose one)
-                if p.total_patients > minimum_patients:
-                    gained = p.total_patients - initial_counts.get(p.name, p.total_patients)
-                    if gained > 0:
-                        physicians_with_gains.append((p, gained))
-            
-            # Sort by gained (highest first)
-            physicians_with_gains.sort(key=lambda x: x[1], reverse=True)
-            
-            print(f"Non-new physicians with gains above minimum (sorted by highest gained):")
-            for p, gained in physicians_with_gains[:10]:  # Show top 10
-                print(f"  {p.name} (Team {p.team}): gained {gained}, current total={p.total_patients}")
-            
-            # Iteratively redistribute until all physicians are at or above minimum
-            # or until we can't find any more sources
-            iteration = 0
-            max_iterations = 100  # Safety limit to prevent infinite loops
-            
-            while total_shortfall > 0 and iteration < max_iterations:
-                iteration += 1
-                print(f"\n  Redistribution iteration {iteration}:")
-                
-                # Recalculate below_minimum (in case it changed)
-                below_minimum = [p for p in all_working if p.total_patients < minimum_patients]
-                if not below_minimum:
-                    print("    All physicians now at or above minimum")
-                    break
-                
-                # Recalculate total shortfall
-                total_shortfall = sum(minimum_patients - p.total_patients for p in below_minimum)
-                print(f"    Total shortfall: {total_shortfall} patients")
-                
-                # Recalculate physicians_with_gains (exclude those now at or below minimum)
-                physicians_with_gains = []
-                for p in non_new_working:
-                    if p.total_patients > minimum_patients:
-                        gained = p.total_patients - initial_counts.get(p.name, p.total_patients)
-                        if gained > 0:
-                            physicians_with_gains.append((p, gained))
-                
-                # Sort by gained (highest first)
-                physicians_with_gains.sort(key=lambda x: x[1], reverse=True)
-                
-                if not physicians_with_gains:
-                    print("    No more physicians available to take patients from")
-                    break
-                
-                # Take no more than one patient from each physician, starting with highest gained
-                patients_removed_this_iteration = 0
-                for physician, gained in physicians_with_gains:
-                    if total_shortfall <= 0:
-                        break
-                    # Double-check they're still above minimum before removing
-                    if physician.total_patients > minimum_patients:
+            # If physician was already at or above new_start_number initially, they should have gained 0
+            if initial_total >= new_start_number:
+                if gained > 0:
+                    # BUG DETECTED: New physician at new_start_number got patients they shouldn't have
+                    # Reset them to their initial total (they should have gained 0)
+                    excess = gained
+                    for _ in range(excess):
                         physician.remove_patient()
-                        patients_removed_this_iteration += 1
-                        total_shortfall -= 1
-                        print(f"    Removed 1 patient from {physician.name} (Team {physician.team}), now at {physician.total_patients}")
+                    # Force their total to be exactly what it should be (no gain)
+                    physician.set_total_patients(initial_total)
+                # If gained == 0, that's correct - they should get 0 patients
+            # If initial_total < new_start_number, they should have gained to reach new_start_number
+            # (This is handled in the "Third" phase above)
+    
+    # ========== MINIMUM PATIENTS CHECK ==========
+    # Check if any physicians are below minimum_patients and redistribute if needed
+    print(f"\n=== MINIMUM PATIENTS CHECK ===")
+    all_working = [p for p in physicians if p.is_working]
+    below_minimum = [p for p in all_working if p.total_patients < minimum_patients]
+    
+    if below_minimum:
+        print(f"Found {len(below_minimum)} physicians below minimum ({minimum_patients}):")
+        for p in below_minimum:
+            print(f"  {p.name} (Team {p.team}): {p.total_patients} patients")
+        
+        # Calculate total shortfall
+        total_shortfall = sum(minimum_patients - p.total_patients for p in below_minimum)
+        print(f"Total shortfall: {total_shortfall} patients")
+        
+        # Use allocation_order (most recent first when reversed) to determine source physicians
+        # Only consider physicians who are above minimum and can afford to lose a patient
+        if allocation_order:
+            # Create a mapping of physician to their most recent allocation index (lower = more recent)
+            allocation_index = {}
+            for idx, physician in enumerate(reversed(allocation_order)):
+                if physician not in allocation_index:
+                    allocation_index[physician] = idx  # Lower index = more recent
+            
+            # Get all physicians above minimum, sort by: highest total first, then most recent allocation
+            potential_sources = [p for p in all_working if p.total_patients > minimum_patients]
+            # Sort by: highest total patients first, then by most recent allocation (lower index = more recent)
+            potential_sources.sort(key=lambda x: (-x.total_patients, allocation_index.get(x, 999)))
+            
+            print(f"Physicians above minimum (sorted by highest total, then most recent): {len(potential_sources)}")
+            for p in potential_sources[:5]:  # Show top 5
+                recent = "recent" if allocation_index.get(p, 999) < 10 else "earlier"
+                print(f"  {p.name}: {p.total_patients} patients ({recent})")
+            
+            # Redistribute: take from physicians with highest total (and most recent allocation)
+            # and give to physicians below minimum
+            below_minimum_sorted = sorted(below_minimum, key=lambda x: x.total_patients)  # Lowest first
+            used_sources = set()  # Track which physicians we've already taken from (no repeats)
+            
+            for target_physician in below_minimum_sorted:
+                if target_physician.total_patients >= minimum_patients:
+                    continue  # Already at minimum
                 
-                # Redistribute the removed patients to physicians below minimum
-                if patients_removed_this_iteration > 0:
-                    print(f"    Redistributing {patients_removed_this_iteration} patients to physicians below minimum:")
-                    below_minimum_sorted = sorted(below_minimum, key=lambda x: x.total_patients)  # Lowest first
-                    for physician in below_minimum_sorted:
-                        if patients_removed_this_iteration <= 0:
-                            break
-                        if physician.total_patients < minimum_patients and can_take_patient(physician):
-                            physician.add_patient()
-                            patients_removed_this_iteration -= 1
-                            print(f"      Added 1 patient to {physician.name} (Team {physician.team}), now at {physician.total_patients}")
-                else:
-                    print("    No patients could be removed this iteration")
-                    break
+                needed = minimum_patients - target_physician.total_patients
+                
+                for source_physician in potential_sources:
+                    if needed <= 0:
+                        break
+                    if source_physician in used_sources:
+                        continue  # Don't repeat - skip if already used
+                    if source_physician.total_patients > minimum_patients and can_take_patient(target_physician):
+                        # Take from source and give to target
+                        source_physician.remove_patient()
+                        target_physician.add_patient()
+                        used_sources.add(source_physician)  # Mark as used (no repeats)
+                        needed -= 1
+                        print(f"  Redistributed: {source_physician.name} ({source_physician.total_patients + 1}→{source_physician.total_patients}) → {target_physician.name} ({target_physician.total_patients - 1}→{target_physician.total_patients})")
+                    
+                    # Stop if target physician has reached minimum (don't give more than needed)
+                    if target_physician.total_patients >= minimum_patients:
+                        break
             
             # Final check
             below_minimum_final = [p for p in all_working if p.total_patients < minimum_patients]
@@ -687,55 +551,15 @@ def allocate_patients(
             else:
                 print(f"\n  SUCCESS: All physicians are now at or above minimum ({minimum_patients})")
         else:
-            print(f"All physicians are at or above minimum ({minimum_patients})")
-        
-        print(f"=== END MINIMUM PATIENTS CHECK ===\n")
+            print("  No allocation order available - cannot redistribute based on recent allocation")
+    else:
+        print(f"All physicians are at or above minimum ({minimum_patients})")
+    
+    print(f"=== END MINIMUM PATIENTS CHECK ===\n")
 
 # --- Streamlit App Begins Here ---
 st.set_page_config(page_title="Patient Allocator", page_icon="🩺", layout="wide")
-
-# Password protection
-PASSWORD = "CRMCCHPG"
-
-# Initialize authentication in session state
-if "authenticated" not in st.session_state:
-    st.session_state["authenticated"] = False
-
-# Check if user is authenticated
-if not st.session_state["authenticated"]:
-    # Show password input form
-    st.title("🔒 Patient Allocator - Access Required")
-    st.markdown("---")
-    
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        st.markdown("### Please enter the password to continue")
-        password_input = st.text_input("Password", type="password", label_visibility="collapsed", placeholder="Enter password")
-        
-        if st.button("Login", use_container_width=True):
-            if password_input == PASSWORD:
-                st.session_state["authenticated"] = True
-                st.rerun()
-            else:
-                st.error("❌ Incorrect password. Please try again.")
-    
-    st.stop()  # Stop execution here if not authenticated
-
-# User is authenticated, show the main app
 st.title("🩺 Physician Patient Allocation")
-
-# Check current day of the week
-current_date = datetime.now()
-day_of_week = current_date.strftime("%A")
-is_wednesday = day_of_week == "Wednesday"
-date_str = current_date.strftime("%B %d, %Y")
-
-# Display day of week prominently
-if is_wednesday:
-    st.success(f"📅 **Today is {day_of_week}, {date_str}**")
-else:
-    st.info(f"📅 **Today is {day_of_week}, {date_str}**")
-
 st.write("Use the sidebar to set patient pools and parameters. Edit physician information in the table below, then click **Run Allocation** to distribute patients according to the logic.")
 
 # Load default parameters if available
@@ -806,17 +630,17 @@ MASTER_PHYSICIAN_LIST = load_master_list(DEFAULT_MASTER_LIST)
 
 # Default rows with specific physician data
 DEFAULT_ROWS = [
-    {"Yesterday": "Abadi", "Physician Name": "Abadi", "Team": "A", "New Physician": False, "Buffer": False, "Working": True, "Total Patients": 9, "StepDown": 1, "Out of floor": 0, "Traded": 0},
-    {"Yesterday": "Adhiakha", "Physician Name": "Adhiakha", "Team": "B", "New Physician": False, "Buffer": False, "Working": True, "Total Patients": 10, "StepDown": 2, "Out of floor": 0, "Traded": 0},
-    {"Yesterday": "", "Physician Name": "Ahir", "Team": "A", "New Physician": False, "Buffer": False, "Working": True, "Total Patients": 10, "StepDown": 3, "Out of floor": 0, "Traded": 0},
-    {"Yesterday": "Ali", "Physician Name": "Ali", "Team": "B", "New Physician": False, "Buffer": False, "Working": True, "Total Patients": 6, "StepDown": 1, "Out of floor": 0, "Traded": 0},
-    {"Yesterday": "Arora", "Physician Name": "Arora", "Team": "A", "New Physician": False, "Buffer": False, "Working": True, "Total Patients": 12, "StepDown": 3, "Out of floor": 0, "Traded": 0},
-    {"Yesterday": "Attrabala", "Physician Name": "Attrabala", "Team": "B", "New Physician": False, "Buffer": False, "Working": True, "Total Patients": 9, "StepDown": 1, "Out of floor": 0, "Traded": 0},
-    {"Yesterday": "Attrapisi", "Physician Name": "Attrapisi", "Team": "A", "New Physician": False, "Buffer": False, "Working": True, "Total Patients": 9, "StepDown": 3, "Out of floor": 0, "Traded": 0},
-    {"Yesterday": "Aung", "Physician Name": "Aung", "Team": "B", "New Physician": False, "Buffer": False, "Working": True, "Total Patients": 10, "StepDown": 0, "Out of floor": 0, "Traded": 0},
-    {"Yesterday": "Batlawala", "Physician Name": "Batlawala", "Team": "A", "New Physician": False, "Buffer": False, "Working": True, "Total Patients": 9, "StepDown": 2, "Out of floor": 0, "Traded": 0},
-    {"Yesterday": "Batth", "Physician Name": "Batth", "Team": "B", "New Physician": False, "Buffer": False, "Working": True, "Total Patients": 9, "StepDown": 2, "Out of floor": 0, "Traded": 0},
-    {"Yesterday": "Bhogireddy", "Physician Name": "Bhogireddy", "Team": "A", "New Physician": False, "Buffer": False, "Working": True, "Total Patients": 10, "StepDown": 2, "Out of floor": 0, "Traded": 0},
+    {"Yesterday": "Abadi", "Physician Name": "Abadi", "Team": "A", "New Physician": False, "Buffer": False, "Working": True, "Total Patients": 9, "StepDown": 1, "Traded": 0},
+    {"Yesterday": "Adhiakha", "Physician Name": "Adhiakha", "Team": "B", "New Physician": False, "Buffer": False, "Working": True, "Total Patients": 10, "StepDown": 2, "Traded": 0},
+    {"Yesterday": "", "Physician Name": "Ahir", "Team": "A", "New Physician": False, "Buffer": False, "Working": True, "Total Patients": 10, "StepDown": 3, "Traded": 0},
+    {"Yesterday": "Ali", "Physician Name": "Ali", "Team": "B", "New Physician": False, "Buffer": False, "Working": True, "Total Patients": 6, "StepDown": 1, "Traded": 0},
+    {"Yesterday": "Arora", "Physician Name": "Arora", "Team": "A", "New Physician": False, "Buffer": False, "Working": True, "Total Patients": 12, "StepDown": 3, "Traded": 0},
+    {"Yesterday": "Attrabala", "Physician Name": "Attrabala", "Team": "B", "New Physician": False, "Buffer": False, "Working": True, "Total Patients": 9, "StepDown": 1, "Traded": 0},
+    {"Yesterday": "Attrapisi", "Physician Name": "Attrapisi", "Team": "A", "New Physician": False, "Buffer": False, "Working": True, "Total Patients": 9, "StepDown": 3, "Traded": 0},
+    {"Yesterday": "Aung", "Physician Name": "Aung", "Team": "B", "New Physician": False, "Buffer": False, "Working": True, "Total Patients": 10, "StepDown": 0, "Traded": 0},
+    {"Yesterday": "Batlawala", "Physician Name": "Batlawala", "Team": "A", "New Physician": False, "Buffer": False, "Working": True, "Total Patients": 9, "StepDown": 2, "Traded": 0},
+    {"Yesterday": "Batth", "Physician Name": "Batth", "Team": "B", "New Physician": False, "Buffer": False, "Working": True, "Total Patients": 9, "StepDown": 2, "Traded": 0},
+    {"Yesterday": "Bhogireddy", "Physician Name": "Bhogireddy", "Team": "A", "New Physician": False, "Buffer": False, "Working": True, "Total Patients": 10, "StepDown": 2, "Traded": 0},
 ]
 
 # Try to load default physicians first, otherwise use hardcoded defaults
@@ -987,7 +811,6 @@ with st.expander("🏥 Select Working Doctors from Master List", expanded=True):
                     "Working": True,
                     "Total Patients": 0,
                     "StepDown": 0,
-                    "Out of floor": 0,
                     "Traded": 0
                 })
             new_df = pd.DataFrame(new_rows)
@@ -1047,7 +870,6 @@ with st.expander("➕ Add Physicians from List", expanded=False):
                         "Working": True,
                         "Total Patients": 0,
                         "StepDown": 0,
-                        "Out of floor": 0,
                         "Traded": 0
                     })
                     added_count += 1
@@ -1175,9 +997,6 @@ edited_phys = st.data_editor(
         "StepDown": st.column_config.NumberColumn(
             "StepDown", min_value=0, step=1, format="%d"
         ),
-        "Out of floor": st.column_config.NumberColumn(
-            "Out of floor", min_value=0, step=1, format="%d"
-        ),
         "Traded": st.column_config.NumberColumn(
             "Traded", min_value=0, step=1, format="%d"
         ),
@@ -1277,18 +1096,17 @@ if run:
     # Prepare results - only show working physicians, exclude Working column
     results_df = pd.DataFrame([
         {
-            "Physician Name": f"{p.name}{'*' if p.is_new else ''}",
+            "Physician Name": p.name,
             "Team": p.team,
             "New Physician": p.is_new,
             "Buffer": p.is_buffer,
             "Original Total Patients": initial_counts[p.name],
             "Total Patients": p.total_patients,
             "Original StepDown": initial_step_down_counts[p.name],
-            "Out of floor": p.transferred_patients,
             "Traded": p.traded_patients,
             "Gained": p.total_patients - initial_counts[p.name],
             "Gained StepDown": p.step_down_patients - initial_step_down_counts[p.name],
-            "Gained + Traded": f"{p.total_patients - initial_counts[p.name]}{' + ' + str(p.traded_patients) if p.traded_patients > 0 else ''}",
+            "Gained + Traded": p.traded_patients + (p.total_patients - initial_counts[p.name]),
         }
         for p in working_physicians
     ])
@@ -1352,10 +1170,6 @@ if run:
 
 # Display results if they exist in session state
 if "allocation_results" in st.session_state and st.session_state["allocation_results"] is not None:
-    # Initialize print summary state
-    if "print_summary" not in st.session_state:
-        st.session_state["print_summary"] = False
-    
     st.markdown("### :clipboard: Results")
     
     # Explain how Total Patients is calculated
@@ -1394,11 +1208,10 @@ if "allocation_results" in st.session_state and st.session_state["allocation_res
             "Total Patients": st.column_config.NumberColumn("Total Patients", min_value=0, step=1, format="%d"),
             "Original StepDown": st.column_config.NumberColumn("Original StepDown", min_value=0, step=1, format="%d", disabled=True),
             "StepDown": st.column_config.NumberColumn("StepDown", min_value=0, step=1, format="%d"),
-            "Out of floor": st.column_config.NumberColumn("Out of floor", min_value=0, step=1, format="%d"),
             "Traded": st.column_config.NumberColumn("Traded", min_value=0, step=1, format="%d"),
             "Gained": st.column_config.NumberColumn("Gained", min_value=0, step=1, format="%d", disabled=True),
             "Gained StepDown": st.column_config.NumberColumn("⭐ Gained StepDown", min_value=0, step=1, format="%d", disabled=True),
-            "Gained + Traded": st.column_config.TextColumn("⭐ Gained + Traded", disabled=True),
+            "Gained + Traded": st.column_config.NumberColumn("⭐ Gained + Traded", min_value=0, step=1, format="%d", disabled=True),
         },
         hide_index=True,
         use_container_width=True,
@@ -1408,19 +1221,7 @@ if "allocation_results" in st.session_state and st.session_state["allocation_res
     
     # Display highlighted summary of key columns
     st.markdown("#### ⭐ Key Metrics (Highlighted)")
-    highlight_df = display_df[["Physician Name", "Team", "Original Total Patients", "Gained + Traded", "Gained StepDown"]].copy()
-    
-    # Add CSS to truncate "Original Total Patients" column width
-    st.markdown("""
-    <style>
-    div[data-testid="stDataFrame"] table th:nth-child(3),
-    div[data-testid="stDataFrame"] table td:nth-child(3) {
-        max-width: 80px !important;
-        min-width: 60px !important;
-        width: 70px !important;
-    }
-    </style>
-    """, unsafe_allow_html=True)
+    highlight_df = display_df[["Physician Name", "Team", "Gained StepDown", "Gained + Traded"]].copy()
     
     def highlight_cols(x):
         return ['background-color: #fff3cd; font-weight: bold' if col in ['Gained StepDown', 'Gained + Traded'] else '' for col in x.index]
@@ -1432,10 +1233,10 @@ if "allocation_results" in st.session_state and st.session_state["allocation_res
     if not edited_results.equals(display_df):
         st.session_state["allocation_results"] = edited_results.copy()
     
-    # Add export options
+    # Add export and print options
     st.markdown("---")
-    st.markdown("### 📄 Export Options")
-    col_export1, col_export2 = st.columns(2)
+    st.markdown("### 📄 Export & Print Options")
+    col_export1, col_export2, col_export3 = st.columns(3)
     
     with col_export1:
         # Download CSV button
@@ -1449,8 +1250,103 @@ if "allocation_results" in st.session_state and st.session_state["allocation_res
         )
     
     with col_export2:
+        # Show printable view
+        show_printable = st.button("🖨️ Show Printable View", help="Display a formatted, print-friendly version of the results")
+    
+    with col_export3:
         # Copy to clipboard option (using text area that can be copied)
         copy_text = st.button("📋 Copy to Clipboard", help="Generate text that can be easily copied")
+    
+    # Display printable view if requested
+    if show_printable:
+        st.markdown("---")
+        st.markdown("### 🖨️ Printable Results Table")
+        
+        # Create a nicely formatted HTML table
+        html_table = edited_results.to_html(index=False, classes='printable-table', table_id='results-table')
+        
+        # Add custom styling for printing
+        print_style = """
+        <style>
+        @media print {
+            body * {
+                visibility: hidden;
+            }
+            .printable-section, .printable-section * {
+                visibility: visible;
+            }
+            .printable-section {
+                position: absolute;
+                left: 0;
+                top: 0;
+                width: 100%;
+            }
+            table.printable-table {
+                border-collapse: collapse;
+                width: 100%;
+                font-size: 12pt;
+            }
+            table.printable-table th, table.printable-table td {
+                border: 1px solid #000;
+                padding: 8px;
+                text-align: left;
+            }
+            table.printable-table th {
+                background-color: #f0f0f0;
+                font-weight: bold;
+            }
+        }
+        .printable-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 11pt;
+        }
+        .printable-table th, .printable-table td {
+            border: 1px solid #ddd;
+            padding: 10px;
+            text-align: left;
+        }
+        .printable-table th {
+            background-color: #4CAF50;
+            color: white;
+            font-weight: bold;
+        }
+        .printable-table tr:nth-child(even) {
+            background-color: #f2f2f2;
+        }
+        .printable-table tr:hover {
+            background-color: #e8f5e9;
+        }
+        </style>
+        """
+        
+        st.markdown(print_style, unsafe_allow_html=True)
+        st.markdown(f'<div class="printable-section">{html_table}</div>', unsafe_allow_html=True)
+        
+        # Add print button - use Streamlit button that triggers JavaScript on next render
+        if 'trigger_print' not in st.session_state:
+            st.session_state.trigger_print = False
+        
+        print_btn = st.button("🖨️ Print This Page", key="print_page_btn",
+                             help="Click to open your browser's print dialog")
+        
+        if print_btn:
+            st.session_state.trigger_print = True
+            st.rerun()
+        
+        # Inject print JavaScript if button was clicked
+        if st.session_state.get('trigger_print', False):
+            st.markdown("""
+            <script>
+                setTimeout(function() {
+                    window.print();
+                }, 100);
+            </script>
+            """, unsafe_allow_html=True)
+            st.session_state.trigger_print = False  # Reset after triggering
+        
+        # Also add instructions
+        st.info("💡 **Tip:** Click the button above or use your browser's print function (Ctrl+P or Cmd+P) to print this page. The table above is optimized for printing.")
     
     # Display copy-friendly text view if requested
     if copy_text:
@@ -1719,361 +1615,6 @@ if "allocation_results" in st.session_state and st.session_state["allocation_res
             st.metric("From Trade", 0)
             st.markdown("---")
             st.metric("**Total to Team N**", patients_to_team_n)
-        
-        # Print Summary button
-        st.markdown("---")
-        print_summary_btn = st.button("🖨️ Print Summary (Key Metrics + Analysis + Allocation)", 
-                                     use_container_width=True, 
-                                     type="primary",
-                                     help="Print Key Metrics, Gain Distribution Analysis, and Allocation Summary on one page")
-        
-        if print_summary_btn:
-            st.session_state["print_summary"] = True
-            st.rerun()
-        
-        # Display printable summary if button was clicked
-        if st.session_state.get("print_summary", False):
-            st.markdown("---")
-            st.markdown("### 🖨️ Printable Summary")
-            
-            # Get variables from session state or recalculate
-            if "allocation_results" in st.session_state and st.session_state["allocation_results"] is not None:
-                print_display_df = st.session_state["allocation_results"].copy()
-                print_highlight_df = print_display_df[["Physician Name", "Team", "Original Total Patients", "Gained + Traded", "Gained StepDown"]].copy()
-                # Sort by Team (A, B, N) then by Physician Name
-                print_highlight_df = print_highlight_df.sort_values(by=["Team", "Physician Name"], ascending=[True, True]).reset_index(drop=True)
-                print_total_gained_regular = print_display_df["Gained"].sum()
-                print_total_gained_stepdown = print_display_df["Gained StepDown"].sum()
-                print_total_gained = print_total_gained_regular
-                print_gain_counts = print_display_df["Gained"].value_counts().sort_index()
-                print_expected_total = st.session_state.get("total_new_patients_input", 0)
-                print_num_physicians_shown = len(print_display_df)
-                print_min_gain = int(print_display_df["Gained"].min())
-                print_max_gain = int(print_display_df["Gained"].max())
-                print_gain_diff = print_max_gain - print_min_gain
-            else:
-                st.error("No allocation results available for printing.")
-                st.session_state["print_summary"] = False
-                st.stop()
-            
-            # Create printable HTML content
-            print_html = """
-            <style>
-            @media print {
-                body * {
-                    visibility: hidden;
-                }
-                .printable-summary, .printable-summary * {
-                    visibility: visible;
-                }
-                .printable-summary {
-                    position: absolute;
-                    left: 0;
-                    top: 0;
-                    width: 100%;
-                }
-            }
-            .printable-summary {
-                font-family: Arial, sans-serif;
-                padding: 10px;
-                font-size: 11pt;
-            }
-            .printable-summary h2 {
-                color: #333;
-                border-bottom: 2px solid #333;
-                padding-bottom: 5px;
-                margin-top: 15px;
-                margin-bottom: 10px;
-                font-size: 16pt;
-            }
-            .printable-summary h3 {
-                color: #555;
-                margin-top: 12px;
-                margin-bottom: 8px;
-                font-size: 13pt;
-            }
-            .printable-summary h4 {
-                margin-top: 8px;
-                margin-bottom: 5px;
-                font-size: 11pt;
-            }
-            .printable-summary table {
-                width: 100%;
-                border-collapse: collapse;
-                margin: 8px 0;
-                font-size: 10pt;
-            }
-            /* Make Key Metrics table text bigger for easier reading */
-            .printable-summary h2:first-of-type + table.printable-table,
-            .printable-summary h2:contains("Key Metrics") + table.printable-table {
-                font-size: 12pt !important;
-            }
-            /* Alternative selector for Key Metrics table */
-            .printable-summary table.printable-table:first-of-type {
-                font-size: 12pt !important;
-            }
-            .printable-summary table.printable-table:first-of-type th,
-            .printable-summary table.printable-table:first-of-type td {
-                font-size: 12pt !important;
-                padding: 6px !important;
-            }
-            .printable-summary th, .printable-summary td {
-                border: 1px solid #ddd;
-                padding: 5px;
-                text-align: left;
-            }
-            /* Make Key Metrics table columns tighter, especially last two columns (Gained + Traded and Gained StepDown) */
-            .printable-summary table.printable-table th:nth-last-child(1),
-            .printable-summary table.printable-table td:nth-last-child(1),
-            .printable-summary table.printable-table th:nth-last-child(2),
-            .printable-summary table.printable-table td:nth-last-child(2) {
-                width: auto;
-                min-width: 60px;
-                max-width: 70px;
-                white-space: nowrap;
-            }
-            .printable-summary table.printable-table th:first-child,
-            .printable-summary table.printable-table td:first-child {
-                width: auto;
-                min-width: 120px;
-            }
-                        .printable-summary table.printable-table th:nth-child(2),
-                        .printable-summary table.printable-table td:nth-child(2) {
-                            width: auto;
-                            min-width: 60px;
-                        }
-                        /* Truncate Original Total Patients column (3rd column) */
-                        .printable-summary table.printable-table th:nth-child(3),
-                        .printable-summary table.printable-table td:nth-child(3) {
-                            max-width: 80px !important;
-                            min-width: 60px !important;
-                            width: 70px !important;
-                        }
-            /* Truncate Original Total Patients column (3rd column) */
-            .printable-summary table.printable-table th:nth-child(3),
-            .printable-summary table.printable-table td:nth-child(3) {
-                max-width: 80px !important;
-                min-width: 60px !important;
-                width: 70px !important;
-            }
-            .printable-summary th {
-                background-color: #4CAF50;
-                color: white;
-                font-weight: bold;
-            }
-            .printable-summary tr:nth-child(even) {
-                background-color: #f2f2f2;
-            }
-            .printable-summary p {
-                margin: 5px 0;
-            }
-            .printable-summary ul {
-                margin: 5px 0;
-                padding-left: 20px;
-            }
-            .highlight-cell {
-                background-color: #fff3cd !important;
-                font-weight: bold !important;
-            }
-            .metric-box {
-                border: 2px solid #ffc107;
-                background: linear-gradient(135deg, #fff3cd 0%, #ffeeba 100%);
-                padding: 8px;
-                margin: 5px 0;
-                border-radius: 3px;
-            }
-            </style>
-            <div class="printable-summary">
-            """
-            
-            # Add Key Metrics
-            print_html += "<h2>⭐ Key Metrics</h2>"
-            print_html += print_highlight_df.to_html(index=False, classes='printable-table')
-            print_html += "<br>"
-            
-            # Add Gain Distribution Analysis (condensed)
-            print_html += "<h2>📈 Gain Distribution Analysis</h2>"
-            print_html += f"<p><strong>Total Gained:</strong> {int(print_total_gained)} | <strong>Step-down:</strong> {int(print_total_gained_stepdown)} | <strong>Physicians:</strong> {int(print_num_physicians_shown)}</p>"
-            print_html += "<p><strong>Distribution:</strong> "
-            dist_list = []
-            for gain_amount in sorted(print_gain_counts.index):
-                count = int(print_gain_counts[gain_amount])
-                dist_list.append(f"{count} physician(s) gained {int(gain_amount)}")
-            print_html += " | ".join(dist_list) + "</p>"
-            
-            if print_expected_total > 0 and print_num_physicians_shown > 0:
-                base_expected = print_expected_total // print_num_physicians_shown
-                remainder_expected = print_expected_total % print_num_physicians_shown
-                print_html += f"<p><strong>Expected:</strong> Base = {base_expected} | {remainder_expected} get {base_expected + 1} | {print_num_physicians_shown - remainder_expected} get {base_expected}</p>"
-            
-            # Recalculate values for print
-            print_team_a_gained_traded = summary["team_a_gained"] + summary["team_b_traded"]
-            print_team_b_gained_traded = summary["team_b_gained"] + summary["team_a_traded"]
-            print_team_n_gained_traded = summary.get("team_n_gained", 0)
-            print_trade_info = {'A_to_B': summary["team_a_traded"], 'B_to_A': summary["team_b_traded"]}
-            
-            # Add Allocation Summary (condensed table format)
-            print_html += "<h2>📊 Allocation Summary</h2>"
-            print_html += "<table style='width:100%; margin-top:10px;'>"
-            print_html += "<tr><th>Team</th><th>Gained (No Trade)</th><th>Step Down Gained</th><th>⭐ Gained + Traded</th></tr>"
-            print_html += f"<tr><td><strong>Team A</strong></td><td>{summary['team_a_gained']}</td><td>{summary['team_a_stepdown_gained']}</td><td style='background-color:#fff3cd; font-weight:bold;'>{int(print_team_a_gained_traded)}</td></tr>"
-            print_html += f"<tr><td><strong>Team B</strong></td><td>{summary['team_b_gained']}</td><td>{summary['team_b_stepdown_gained']}</td><td style='background-color:#fff3cd; font-weight:bold;'>{int(print_team_b_gained_traded)}</td></tr>"
-            print_html += f"<tr><td><strong>Team N</strong></td><td>{summary.get('team_n_gained', 0)}</td><td>{summary.get('team_n_stepdown_gained', 0)}</td><td style='background-color:#fff3cd; font-weight:bold;'>{int(print_team_n_gained_traded)}</td></tr>"
-            print_html += "</table>"
-            
-            # Overall census (condensed)
-            print_html += "<h3>Overall Summary</h3>"
-            print_html += f"<p><strong>Total Census:</strong> {summary['total_census']}</p>"
-            print_html += f"<p><strong>Total Patients Gained from Yesterday:</strong> {summary['total_gained']}</p>"
-            
-            print_html += "</div>"
-            
-            # Display the printable content
-            st.markdown(print_html, unsafe_allow_html=True)
-            
-            # Add print instructions and download option
-            st.markdown("---")
-            st.markdown("### 🖨️ Print Options")
-            
-            col_btn1, col_btn2, col_btn3 = st.columns(3)
-            
-            with col_btn1:
-                # Download as HTML file that can be printed
-                html_content = f"""
-                <!DOCTYPE html>
-                <html>
-                <head>
-                    <title>Patient Allocation Summary</title>
-                    <style>
-                        @media print {{
-                            body * {{
-                                visibility: hidden;
-                            }}
-                            .printable-summary, .printable-summary * {{
-                                visibility: visible;
-                            }}
-                            .printable-summary {{
-                                position: absolute;
-                                left: 0;
-                                top: 0;
-                                width: 100%;
-                            }}
-                        }}
-                        body {{
-                            font-family: Arial, sans-serif;
-                            padding: 20px;
-                        }}
-                        .printable-summary {{
-                            font-family: Arial, sans-serif;
-                            padding: 20px;
-                        }}
-                        .printable-summary h2 {{
-                            color: #333;
-                            border-bottom: 2px solid #333;
-                            padding-bottom: 10px;
-                        }}
-                        .printable-summary h3 {{
-                            color: #555;
-                            margin-top: 20px;
-                        }}
-                        .printable-summary table {{
-                            width: 100%;
-                            border-collapse: collapse;
-                            margin: 15px 0;
-                        }}
-                        /* Make Key Metrics table text bigger for easier reading */
-                        .printable-summary table.printable-table:first-of-type {{
-                            font-size: 12pt !important;
-                        }}
-                        .printable-summary table.printable-table:first-of-type th,
-                        .printable-summary table.printable-table:first-of-type td {{
-                            font-size: 12pt !important;
-                            padding: 6px !important;
-                        }}
-                        .printable-summary th, .printable-summary td {{
-                            border: 1px solid #ddd;
-                            padding: 8px;
-                            text-align: left;
-                        }}
-                        .printable-summary th {{
-                            background-color: #4CAF50;
-                            color: white;
-                            font-weight: bold;
-                        }}
-                        .printable-summary tr:nth-child(even) {{
-                               background-color: #f2f2f2;
-                        }}
-                        /* Make Key Metrics table columns tighter, especially last two columns (Gained + Traded and Gained StepDown) */
-                        .printable-summary table.printable-table th:nth-last-child(1),
-                        .printable-summary table.printable-table td:nth-last-child(1),
-                        .printable-summary table.printable-table th:nth-last-child(2),
-                        .printable-summary table.printable-table td:nth-last-child(2) {{
-                            width: auto;
-                            min-width: 60px;
-                            max-width: 70px;
-                            white-space: nowrap;
-                        }}
-                        .printable-summary table.printable-table th:first-child,
-                        .printable-summary table.printable-table td:first-child {{
-                            width: auto;
-                            min-width: 120px;
-                        }}
-                        .printable-summary table.printable-table th:nth-child(2),
-                        .printable-summary table.printable-table td:nth-child(2) {{
-                            width: auto;
-                            min-width: 60px;
-                        }}
-                        .metric-box {{
-                            border: 2px solid #ffc107;
-                            background: linear-gradient(135deg, #fff3cd 0%, #ffeeba 100%);
-                            padding: 15px;
-                            margin: 10px 0;
-                            border-radius: 5px;
-                        }}
-                        .print-btn {{
-                            text-align: center;
-                            margin: 20px 0;
-                        }}
-                        button {{
-                            background-color: #4CAF50;
-                            color: white;
-                            padding: 12px 24px;
-                            font-size: 16px;
-                            font-weight: bold;
-                            border: none;
-                            border-radius: 5px;
-                            cursor: pointer;
-                        }}
-                    </style>
-                </head>
-                <body>
-                    {print_html}
-                    <div class="print-btn">
-                        <button onclick="window.print()">🖨️ Print This Page</button>
-                    </div>
-                </body>
-                </html>
-                """
-                st.download_button(
-                    label="📥 Download HTML for Printing",
-                    data=html_content,
-                    file_name=f"allocation_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html",
-                    mime="text/html",
-                    use_container_width=True,
-                    help="Download an HTML file that you can open in your browser and print"
-                )
-            
-            with col_btn2:
-                st.markdown("**Or use keyboard shortcut:**")
-                st.markdown("**Ctrl+P** (Windows/Linux)  \n**Cmd+P** (Mac)")
-                st.markdown("*(While viewing the content above)*")
-            
-            with col_btn3:
-                if st.button("❌ Close Print View", key="close_print_btn", use_container_width=True):
-                    st.session_state["print_summary"] = False
-                    st.rerun()
-            
-            st.info("💡 **Tip:** The content above is optimized for printing. **Option 1:** Download the HTML file and open it in your browser to print. **Option 2:** Press **Ctrl+P** (Windows) or **Cmd+P** (Mac) while viewing the content above.")
         
 # Handle structure changes and show info when no results exist  
 if "allocation_results" not in st.session_state or st.session_state["allocation_results"] is None:
