@@ -1498,8 +1498,8 @@ if "allocation_results" in st.session_state and st.session_state["allocation_res
         
         # Calculate trades
         trade_info = {'A_to_B': summary["team_a_traded"], 'B_to_A': summary["team_b_traded"]}
-        team_a_gained_traded = summary["team_a_gained"] + summary["team_b_traded"]
-        team_b_gained_traded = summary["team_b_gained"] + summary["team_a_traded"]
+        team_a_gained_traded = summary["team_a_gained"] + summary["team_a_traded"]
+        team_b_gained_traded = summary["team_b_gained"] + summary["team_b_traded"]
         
         st.markdown("### 📊 Allocation Summary")
         
@@ -1861,8 +1861,8 @@ if "allocation_results" in st.session_state and st.session_state["allocation_res
                 print_html += f"<p><strong>Expected:</strong> Base = {base_expected} | {remainder_expected} get {base_expected + 1} | {print_num_physicians_shown - remainder_expected} get {base_expected}</p>"
             
             # Recalculate values for print
-            print_team_a_gained_traded = summary["team_a_gained"] + summary["team_b_traded"]
-            print_team_b_gained_traded = summary["team_b_gained"] + summary["team_a_traded"]
+            print_team_a_gained_traded = summary["team_a_gained"] + summary["team_a_traded"]
+            print_team_b_gained_traded = summary["team_b_gained"] + summary["team_b_traded"]
             print_team_n_gained_traded = summary.get("team_n_gained", 0)
             print_trade_info = {'A_to_B': summary["team_a_traded"], 'B_to_A': summary["team_b_traded"]}
             
@@ -2032,8 +2032,7 @@ if "allocation_results" in st.session_state and st.session_state["allocation_res
 # Handle structure changes and show info when no results exist  
 if "allocation_results" not in st.session_state or st.session_state["allocation_results"] is None:
     # Check if structure changed (rows/columns added/removed via data editor)
-    # Only update session state for structure changes, not value changes
-    # This prevents the double-entry bug while still persisting structural changes
+    # Also check if "Traded" column values changed (to persist manual edits)
     # Remove blank column before comparing and saving
     edited_phys_clean = edited_phys.copy()
     if "" in edited_phys_clean.columns:
@@ -2042,13 +2041,30 @@ if "allocation_results" not in st.session_state or st.session_state["allocation_
     if "" in current_table_clean.columns:
         current_table_clean = current_table_clean.drop(columns=[""])
     
-    if (current_table_clean.shape != edited_phys_clean.shape or 
-        list(current_table_clean.columns) != list(edited_phys_clean.columns)):
+    # Check for structure changes
+    structure_changed = (current_table_clean.shape != edited_phys_clean.shape or 
+                        list(current_table_clean.columns) != list(edited_phys_clean.columns))
+    
+    # Check if "Traded" column values changed (only if structure is the same to avoid conflicts)
+    traded_changed = False
+    if not structure_changed and "Traded" in edited_phys_clean.columns and "Traded" in current_table_clean.columns:
+        # Compare Traded values - use fillna to handle NaN values and reset_index to ensure alignment
+        current_traded = current_table_clean["Traded"].fillna(0).reset_index(drop=True)
+        edited_traded = edited_phys_clean["Traded"].fillna(0).reset_index(drop=True)
+        # Check if any values differ
+        if len(current_traded) == len(edited_traded) and not current_traded.equals(edited_traded):
+            traded_changed = True
+    
+    if structure_changed:
         # Structure changed - update session state and rerun
-        # This is necessary to persist row additions/deletions
         st.session_state["physician_table"] = edited_phys_clean
         save_data(edited_phys_clean)  # Persist changes
         st.rerun()
+    elif traded_changed:
+        # Traded values changed - update session state without rerun to avoid losing focus
+        # The data editor maintains its state via the key, and we save for persistence
+        st.session_state["physician_table"] = edited_phys_clean
+        save_data(edited_phys_clean)  # Persist changes
     
     # For value changes, don't update session state here
     # The widget's key maintains the state, and we'll update session state
