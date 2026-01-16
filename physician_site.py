@@ -1246,6 +1246,31 @@ edited_phys = st.data_editor(
     on_change=None,  # Don't use on_change to avoid conflicts
 )
 
+# Auto-save: Detect changes and persist to database immediately
+edited_phys_for_save = edited_phys.copy()
+if "" in edited_phys_for_save.columns:
+    edited_phys_for_save = edited_phys_for_save.drop(columns=[""])
+
+# Compare with session state to detect changes
+current_session_table = st.session_state.get("physician_table", pd.DataFrame())
+if not edited_phys_for_save.empty:
+    # Check if data has changed
+    data_changed = False
+    if current_session_table.empty or len(edited_phys_for_save) != len(current_session_table):
+        data_changed = True
+    else:
+        # Compare relevant columns
+        compare_cols = ["Physician Name", "Team", "New Physician", "Buffer", "Working", "Total Patients", "StepDown", "Traded"]
+        for col in compare_cols:
+            if col in edited_phys_for_save.columns and col in current_session_table.columns:
+                if not edited_phys_for_save[col].equals(current_session_table[col]):
+                    data_changed = True
+                    break
+
+    if data_changed:
+        st.session_state["physician_table"] = edited_phys_for_save
+        save_data(edited_phys_for_save)
+
 # Add sorting options for the input table (after data editor to capture edits)
 sort_col1, sort_col2 = st.columns(2)
 with sort_col1:
