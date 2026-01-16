@@ -1276,6 +1276,19 @@ if not edited_phys_for_save.empty:
     if data_changed:
         st.session_state["physician_table"] = edited_phys_for_save
         save_data(edited_phys_for_save)
+        st.toast("Changes saved!", icon="✅")
+
+# Manual save button as fallback
+save_col, _ = st.columns([1, 3])
+with save_col:
+    if st.button("💾 Save Changes", use_container_width=True):
+        edited_phys_manual = edited_phys.copy()
+        if "" in edited_phys_manual.columns:
+            edited_phys_manual = edited_phys_manual.drop(columns=[""])
+        st.session_state["physician_table"] = edited_phys_manual
+        save_data(edited_phys_manual)
+        st.toast("Changes saved!", icon="✅")
+        st.rerun()
 
 # Add sorting options for the input table (after data editor to capture edits)
 sort_col1, sort_col2 = st.columns(2)
