@@ -1252,34 +1252,8 @@ edited_phys = st.data_editor(
     on_change=None,  # Don't use on_change to avoid conflicts
 )
 
-# Auto-save: Detect changes and persist to database immediately
-edited_phys_for_save = edited_phys.copy()
-if "" in edited_phys_for_save.columns:
-    edited_phys_for_save = edited_phys_for_save.drop(columns=[""])
-
-# Compare with session state to detect changes
-current_session_table = st.session_state.get("physician_table", pd.DataFrame())
-if not edited_phys_for_save.empty:
-    # Check if data has changed
-    data_changed = False
-    if current_session_table.empty or len(edited_phys_for_save) != len(current_session_table):
-        data_changed = True
-    else:
-        # Compare relevant columns
-        compare_cols = ["Physician Name", "Team", "New Physician", "Buffer", "Working", "Total Patients", "StepDown", "Traded"]
-        for col in compare_cols:
-            if col in edited_phys_for_save.columns and col in current_session_table.columns:
-                if not edited_phys_for_save[col].equals(current_session_table[col]):
-                    data_changed = True
-                    break
-
-    if data_changed:
-        st.session_state["physician_table"] = edited_phys_for_save
-        save_data(edited_phys_for_save)
-        st.toast("Changes saved!", icon="✅")
-
-# Manual save button as fallback
-save_col, _ = st.columns([1, 3])
+# Manual save and reset buttons
+save_col, reset_col, _ = st.columns([1, 1, 2])
 with save_col:
     if st.button("💾 Save Changes", use_container_width=True):
         edited_phys_manual = edited_phys.copy()
@@ -1288,6 +1262,28 @@ with save_col:
         st.session_state["physician_table"] = edited_phys_manual
         save_data(edited_phys_manual)
         st.toast("Changes saved!", icon="✅")
+        st.rerun()
+
+with reset_col:
+    if st.button("🔄 Reset to Defaults", use_container_width=True):
+        # Load default physicians from database or hardcoded defaults
+        default_df = load_default_physicians()
+        if default_df is None or default_df.empty:
+            # Use hardcoded defaults
+            default_df = pd.DataFrame(DEFAULT_ROWS)
+        # Add Yesterday column
+        if "Yesterday" not in default_df.columns:
+            default_df["Yesterday"] = ""
+        # Reorder columns
+        cols = default_df.columns.tolist()
+        if "Yesterday" in cols:
+            cols.remove("Yesterday")
+            cols.insert(0, "Yesterday")
+        default_df = default_df[cols]
+        # Save to database and session state
+        st.session_state["physician_table"] = default_df
+        save_data(default_df)
+        st.toast("Reset to defaults!", icon="🔄")
         st.rerun()
 
 # Add sorting options for the input table (after data editor to capture edits)
