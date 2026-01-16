@@ -7,16 +7,11 @@ from datetime import datetime
 from database import (
     get_db, init_database, get_data_version, increment_data_version,
     Physician as PhysicianModel, MasterPhysician, UserSelection,
-    YesterdayPhysician, Parameter, DefaultPhysician, DataVersion,
-    DATABASE_URL
+    YesterdayPhysician, Parameter, DefaultPhysician, DataVersion
 )
 
 # Initialize database on startup
 init_database()
-
-# Debug: Show database connection info in sidebar
-_db_type = "PostgreSQL" if "postgresql" in DATABASE_URL else "SQLite"
-st.sidebar.markdown(f"**DB:** {_db_type}")
 
 
 def save_data(df):
@@ -139,6 +134,26 @@ def load_selected_physicians():
     with get_db() as db:
         records = db.query(UserSelection).filter(UserSelection.is_selected == True).all()
         return [r.physician_name for r in records if r.physician_name]
+
+
+def save_team_assignments(team_assignments):
+    """Saves team assignments to the database."""
+    with get_db() as db:
+        for name, team in team_assignments.items():
+            if name and str(name).strip():
+                # Check if record exists
+                record = db.query(UserSelection).filter(UserSelection.physician_name == name).first()
+                if record:
+                    record.team_assignment = team
+                else:
+                    db.add(UserSelection(physician_name=str(name).strip(), team_assignment=team, is_selected=False))
+
+
+def load_team_assignments():
+    """Loads team assignments from the database."""
+    with get_db() as db:
+        records = db.query(UserSelection).all()
+        return {r.physician_name: r.team_assignment for r in records if r.physician_name and r.team_assignment}
 
 
 def save_master_list(physician_names):
@@ -773,13 +788,16 @@ if "selected_physicians" not in st.session_state:
 
 # Initialize team assignments for master list physicians
 if "master_team_assignments" not in st.session_state:
-    st.session_state["master_team_assignments"] = {}
-    # If we have a current table, initialize team assignments from it
+    # First, load saved team assignments from database
+    saved_team_assignments = load_team_assignments()
+    st.session_state["master_team_assignments"] = saved_team_assignments.copy() if saved_team_assignments else {}
+
+    # If we have a current table, fill in any missing assignments from it
     if "physician_table" in st.session_state and not st.session_state["physician_table"].empty:
         for _, row in st.session_state["physician_table"].iterrows():
             name = str(row.get("Physician Name", ""))
             team = str(row.get("Team", "A"))
-            if name and name in MASTER_PHYSICIAN_LIST:
+            if name and name in MASTER_PHYSICIAN_LIST and name not in st.session_state["master_team_assignments"]:
                 st.session_state["master_team_assignments"][name] = team if team in ["A", "B", "N"] else "A"
 
 # Initialize checkbox reset counter
@@ -923,10 +941,11 @@ with st.expander("🏥 Select Working Doctors from Master List", expanded=True):
                                     )
                                     if new_team != current_team:
                                         st.session_state["master_team_assignments"][doctor_name] = new_team
+                                        save_team_assignments(st.session_state["master_team_assignments"])
                                         st.rerun()
             else:
                 st.markdown("<small>No doctors assigned to Team A</small>", unsafe_allow_html=True)
-    
+
     # Team B box (right side) - compact layout
     with team_b_col:
         st.markdown('<p class="compact-team-header">👥 Team B</p>', unsafe_allow_html=True)
@@ -968,6 +987,7 @@ with st.expander("🏥 Select Working Doctors from Master List", expanded=True):
                                     )
                                     if new_team != current_team:
                                         st.session_state["master_team_assignments"][doctor_name] = new_team
+                                        save_team_assignments(st.session_state["master_team_assignments"])
                                         st.rerun()
             else:
                 st.markdown("<small>No doctors assigned to Team B</small>", unsafe_allow_html=True)
@@ -1012,6 +1032,7 @@ with st.expander("🏥 Select Working Doctors from Master List", expanded=True):
                                 )
                                 if new_team != current_team:
                                     st.session_state["master_team_assignments"][doctor_name] = new_team
+                                    save_team_assignments(st.session_state["master_team_assignments"])
                                     st.rerun()
         else:
             st.markdown("<small>No doctors assigned to Team N</small>", unsafe_allow_html=True)
