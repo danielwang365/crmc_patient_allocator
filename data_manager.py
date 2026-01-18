@@ -10,6 +10,7 @@ from config import (
     MASTER_LIST_FILE, DEFAULT_PARAMS_FILE, DEFAULT_PHYSICIANS_FILE,
     DEFAULT_MASTER_LIST, DEFAULT_PARAMETERS
 )
+from models import Physician
 
 
 def _str_to_bool(value):
@@ -30,8 +31,14 @@ def _safe_int(value, default=0):
 
 
 def save_physicians(physicians_list):
-    """Saves the physician table to a CSV file from a list of dicts."""
+    """Saves the physician table to a CSV file from a list of Physician objects."""
     if not physicians_list:
+        # Write empty file with headers
+        fieldnames = ["Yesterday", "Physician Name", "Team", "New Physician", "Buffer",
+                      "Working", "Total Patients", "StepDown", "Out of floor", "Traded"]
+        with open(DATA_FILE, 'w', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
         return
 
     fieldnames = ["Yesterday", "Physician Name", "Team", "New Physician", "Buffer",
@@ -41,22 +48,37 @@ def save_physicians(physicians_list):
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         for p in physicians_list:
-            writer.writerow({
-                "Yesterday": p.get("yesterday", ""),
-                "Physician Name": p.get("name", ""),
-                "Team": p.get("team", "A"),
-                "New Physician": p.get("is_new", False),
-                "Buffer": p.get("is_buffer", False),
-                "Working": p.get("is_working", True),
-                "Total Patients": p.get("total_patients", 0),
-                "StepDown": p.get("step_down_patients", 0),
-                "Out of floor": p.get("transferred_patients", 0),
-                "Traded": p.get("traded_patients", 0)
-            })
+            # Handle both Physician objects and dicts
+            if isinstance(p, Physician):
+                writer.writerow({
+                    "Yesterday": p.yesterday,
+                    "Physician Name": p.name,
+                    "Team": p.team,
+                    "New Physician": p.is_new,
+                    "Buffer": p.is_buffer,
+                    "Working": p.is_working,
+                    "Total Patients": p.total_patients,
+                    "StepDown": p.step_down_patients,
+                    "Out of floor": p.transferred_patients,
+                    "Traded": p.traded_patients
+                })
+            else:
+                writer.writerow({
+                    "Yesterday": p.get("yesterday", ""),
+                    "Physician Name": p.get("name", ""),
+                    "Team": p.get("team", "A"),
+                    "New Physician": p.get("is_new", False),
+                    "Buffer": p.get("is_buffer", False),
+                    "Working": p.get("is_working", True),
+                    "Total Patients": p.get("total_patients", 0),
+                    "StepDown": p.get("step_down_patients", 0),
+                    "Out of floor": p.get("transferred_patients", 0),
+                    "Traded": p.get("traded_patients", 0)
+                })
 
 
 def load_physicians():
-    """Loads the physician table from a CSV file. Returns list of dicts."""
+    """Loads the physician table from a CSV file. Returns list of Physician objects."""
     yesterday_physicians = load_yesterday_physicians()
 
     if not os.path.exists(DATA_FILE):
@@ -77,21 +99,21 @@ def load_physicians():
                 if not yesterday and name in yesterday_physicians:
                     yesterday = name
 
-                physicians.append({
-                    "name": name,
-                    "yesterday": yesterday,
-                    "team": str(row.get("Team", "A")).strip() or "A",
-                    "is_new": _str_to_bool(row.get("New Physician", False)),
-                    "is_buffer": _str_to_bool(row.get("Buffer", False)),
-                    "is_working": _str_to_bool(row.get("Working", True)),
-                    "total_patients": _safe_int(row.get("Total Patients", 0)),
-                    "step_down_patients": _safe_int(row.get("StepDown", 0)),
-                    "transferred_patients": _safe_int(row.get("Out of floor", 0)),
-                    "traded_patients": _safe_int(row.get("Traded", 0))
-                })
+                physicians.append(Physician(
+                    name=name,
+                    yesterday=yesterday,
+                    team=str(row.get("Team", "A")).strip() or "A",
+                    is_new=_str_to_bool(row.get("New Physician", False)),
+                    is_buffer=_str_to_bool(row.get("Buffer", False)),
+                    is_working=_str_to_bool(row.get("Working", True)),
+                    total_patients=_safe_int(row.get("Total Patients", 0)),
+                    step_down_patients=_safe_int(row.get("StepDown", 0)),
+                    transferred_patients=_safe_int(row.get("Out of floor", 0)),
+                    traded_patients=_safe_int(row.get("Traded", 0))
+                ))
 
         # Sort alphabetically by physician name
-        physicians.sort(key=lambda p: p["name"])
+        physicians.sort(key=lambda p: p.name)
         return physicians
     except Exception as e:
         print(f"Error loading physicians: {e}")
@@ -293,8 +315,11 @@ def update_physician(name, updated_data):
     """Update a single physician's data by name."""
     physicians = load_physicians()
     for i, p in enumerate(physicians):
-        if p["name"] == name:
-            physicians[i].update(updated_data)
+        if p.name == name:
+            # Update attributes
+            for key, value in updated_data.items():
+                if hasattr(p, key):
+                    setattr(p, key, value)
             break
     save_physicians(physicians)
     return physicians
@@ -303,8 +328,11 @@ def update_physician(name, updated_data):
 def add_physician(physician_data):
     """Add a new physician to the table."""
     physicians = load_physicians()
-    existing_names = [p["name"] for p in physicians]
-    if physician_data.get("name") not in existing_names:
+    existing_names = [p.name for p in physicians]
+    name = physician_data.get("name") if isinstance(physician_data, dict) else physician_data.name
+    if name not in existing_names:
+        if isinstance(physician_data, dict):
+            physician_data = Physician(**physician_data)
         physicians.append(physician_data)
         save_physicians(physicians)
     return physicians
@@ -313,6 +341,27 @@ def add_physician(physician_data):
 def delete_physician(name):
     """Delete a physician from the table by name."""
     physicians = load_physicians()
-    physicians = [p for p in physicians if p["name"] != name]
+    physicians = [p for p in physicians if p.name != name]
     save_physicians(physicians)
     return physicians
+
+
+# Alias functions for app.py compatibility
+def load_yesterday():
+    """Alias for load_yesterday_physicians."""
+    return load_yesterday_physicians()
+
+
+def save_yesterday(names):
+    """Alias for save_yesterday_physicians."""
+    save_yesterday_physicians(names)
+
+
+def load_selected():
+    """Alias for load_selected_physicians."""
+    return load_selected_physicians()
+
+
+def save_selected(names):
+    """Alias for save_selected_physicians."""
+    save_selected_physicians(names)
