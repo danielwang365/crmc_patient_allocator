@@ -233,10 +233,13 @@ def save_team_assignments_route():
 @app.route('/api/generate-table', methods=['POST'])
 @login_required
 def generate_table():
-    """Generate physician table from selections."""
+    """Generate physician table from selections, preserving existing data."""
     data = request.json
     selections = data.get('selections', [])
     yesterday_list = load_yesterday()
+
+    # Load existing physician data to preserve their values
+    existing = {p.name: p for p in load_physicians()}
 
     physicians = []
     for sel in selections:
@@ -244,18 +247,27 @@ def generate_table():
         team = sel.get('team', 'A')
         was_yesterday = name in yesterday_list
 
-        physicians.append(Physician.from_dict({
-            'name': name,
-            'yesterday': name if was_yesterday else '',
-            'team': team,
-            'is_new': False,
-            'is_buffer': False,
-            'is_working': True,
-            'total_patients': 0,
-            'step_down_patients': 0,
-            'transferred_patients': 0,
-            'traded_patients': 0,
-        }))
+        if name in existing:
+            # PRESERVE existing data, only update team and yesterday
+            p = existing[name]
+            p.team = team
+            if was_yesterday and not p.yesterday:
+                p.yesterday = name
+            physicians.append(p)
+        else:
+            # NEW physician - start with defaults
+            physicians.append(Physician.from_dict({
+                'name': name,
+                'yesterday': name if was_yesterday else '',
+                'team': team,
+                'is_new': False,
+                'is_buffer': False,
+                'is_working': True,
+                'total_patients': 0,
+                'step_down_patients': 0,
+                'transferred_patients': 0,
+                'traded_patients': 0,
+            }))
 
     save_physicians(physicians)
     return jsonify({'physicians': [p.to_dict() for p in physicians]})

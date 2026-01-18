@@ -144,17 +144,22 @@ function renderMasterList() {
     containerB.innerHTML = '';
     containerN.innerHTML = '';
 
+    // Get list of physicians currently in the table
+    const physiciansInTable = getPhysiciansInTable();
+
     let countA = 0, countB = 0, countN = 0;
 
     masterList.forEach(name => {
         const isChecked = selectedPhysicians.includes(name);
         const team = teamAssignments[name] || 'A';
         const wasYesterday = yesterdayPhysicians.includes(name);
+        const isInTable = physiciansInTable.includes(name);
 
         const item = document.createElement('div');
         item.className = 'master-list-item';
         if (wasYesterday) item.classList.add('yesterday');
         if (isChecked) item.classList.add('selected');
+        if (isInTable) item.classList.add('in-table');
 
         // Determine which buttons to show based on current team
         let moveButtons = '';
@@ -175,9 +180,15 @@ function renderMasterList() {
             `;
         }
 
+        // Add/Remove table button
+        const tableButton = isInTable
+            ? `<button class="table-action-btn remove-btn" title="Remove from table">−</button>`
+            : `<button class="table-action-btn add-btn" title="Add to table">+</button>`;
+
         item.innerHTML = `
             <input type="checkbox" id="check_${name}" ${isChecked ? 'checked' : ''}>
             <label for="check_${name}">${name}</label>
+            ${tableButton}
             ${moveButtons}
         `;
 
@@ -194,6 +205,17 @@ function renderMasterList() {
                 item.classList.remove('selected');
             }
             updateSelectedCounts();
+        });
+
+        // Add/Remove table button handler
+        const tableBtn = item.querySelector('.table-action-btn');
+        tableBtn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            if (isInTable) {
+                await removeFromTable(name);
+            } else {
+                await addToTable(name, team);
+            }
         });
 
         // Move team button handlers
@@ -323,6 +345,64 @@ function uncheckAll() {
     selectedPhysicians = [];
     renderMasterList();
     showSaveIndicator('All deselected');
+}
+
+// Add a single physician to the table without regenerating
+async function addToTable(name, team) {
+    // Get current grid data
+    const currentData = [];
+    physicianGridApi.forEachNode(node => currentData.push(node.data));
+
+    // Check if already exists
+    if (currentData.some(p => p.name === name)) {
+        showSaveIndicator('Already in table!');
+        return;
+    }
+
+    // Add new physician with defaults
+    const wasYesterday = yesterdayPhysicians.includes(name);
+    currentData.push({
+        name: name,
+        yesterday: wasYesterday ? name : '',
+        team: team,
+        is_new: false,
+        is_buffer: false,
+        is_working: true,
+        total_patients: 0,
+        step_down_patients: 0,
+        transferred_patients: 0,
+        traded_patients: 0,
+    });
+
+    // Save and update grid
+    await API.bulkUpdatePhysicians(currentData);
+    physicianGridApi.setGridOption('rowData', currentData);
+    renderMasterList(); // Update buttons
+    showSaveIndicator('Added to table!');
+}
+
+// Remove a single physician from the table without regenerating
+async function removeFromTable(name) {
+    const currentData = [];
+    physicianGridApi.forEachNode(node => {
+        if (node.data.name !== name) {
+            currentData.push(node.data);
+        }
+    });
+
+    await API.bulkUpdatePhysicians(currentData);
+    physicianGridApi.setGridOption('rowData', currentData);
+    renderMasterList(); // Update buttons
+    showSaveIndicator('Removed from table!');
+}
+
+// Get list of physicians currently in the table
+function getPhysiciansInTable() {
+    const names = [];
+    if (physicianGridApi) {
+        physicianGridApi.forEachNode(node => names.push(node.data.name));
+    }
+    return names;
 }
 
 // Delete selected physician from grid

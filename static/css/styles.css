@@ -369,6 +369,43 @@ body {
     background: var(--gray-200);
 }
 
+/* Add/Remove table buttons */
+.master-list-item .table-action-btn {
+    padding: 2px 8px;
+    font-size: 14px;
+    font-weight: 600;
+    border: 1px solid var(--gray-300);
+    border-radius: 4px;
+    cursor: pointer;
+    min-width: 24px;
+}
+
+.master-list-item .add-btn {
+    background: #dcfce7;
+    color: #16a34a;
+    border-color: #86efac;
+}
+
+.master-list-item .add-btn:hover {
+    background: #bbf7d0;
+}
+
+.master-list-item .remove-btn {
+    background: #fee2e2;
+    color: #dc2626;
+    border-color: #fca5a5;
+}
+
+.master-list-item .remove-btn:hover {
+    background: #fecaca;
+}
+
+/* Highlight physicians in the table */
+.master-list-item.in-table {
+    background: #eff6ff;
+    border-color: #93c5fd;
+}
+
 /* Legacy grid fallback */
 .master-list-grid {
     display: grid;
