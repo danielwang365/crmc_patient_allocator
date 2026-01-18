@@ -23,17 +23,16 @@ async function initializeApp() {
         loadMasterList(),
         loadYesterday(),
         loadParameters(),
-        loadPhysicians(),
     ]);
 
-    // Initialize grids
-    initializePhysicianGrid();
+    // Initialize grids (this will load physicians)
+    await initializePhysicianGrid();
     initializeResultsGrid();
 
     // Setup event listeners
     setupEventListeners();
 
-    // Render master list
+    // Render master list (after grid is populated)
     renderMasterList();
     renderMasterListManage();
 }
@@ -84,6 +83,9 @@ async function loadParameters() {
             if (el) el.value = val;
         };
         setVal('n_total_new_patients', params.n_total_new_patients || 20);
+        setVal('n_A_new_patients', params.n_A_new_patients || 10);
+        setVal('n_B_new_patients', params.n_B_new_patients || 8);
+        setVal('n_N_new_patients', params.n_N_new_patients || 2);
         setVal('n_step_down_patients', params.n_step_down_patients || 0);
         setVal('minimum_total', params.minimum_patients || 10);
         setVal('maximum_total', params.maximum_patients || 14);
@@ -103,7 +105,7 @@ async function loadPhysicians() {
 }
 
 // Initialize physician grid
-function initializePhysicianGrid() {
+async function initializePhysicianGrid() {
     const debouncedSave = debounce(async (params) => {
         const rowData = [];
         physicianGridApi.forEachNode(node => rowData.push(node.data));
@@ -113,8 +115,8 @@ function initializePhysicianGrid() {
 
     physicianGridApi = createPhysicianGrid('physicianGrid', debouncedSave);
 
-    // Load initial data
-    loadPhysicians();
+    // Load initial data and wait for it
+    await loadPhysicians();
 }
 
 // Initialize results grid
@@ -543,6 +545,9 @@ async function runAllocation() {
     const getVal = (id, def) => parseInt(document.getElementById(id)?.value) || def;
     const parameters = {
         n_total_new_patients: getVal('n_total_new_patients', 20),
+        n_A_new_patients: getVal('n_A_new_patients', 10),
+        n_B_new_patients: getVal('n_B_new_patients', 8),
+        n_N_new_patients: getVal('n_N_new_patients', 2),
         n_step_down_patients: getVal('n_step_down_patients', 0),
         minimum_patients: getVal('minimum_total', 10),
         maximum_patients: getVal('maximum_total', 14),
