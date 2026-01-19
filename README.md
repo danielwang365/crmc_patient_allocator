@@ -103,11 +103,6 @@ The application is configured for Railway deployment:
 
 Environment variables (can be set in `.env` file):
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `SECRET_KEY` | Flask session secret key | `dev-secret-key-change-in-production` |
-| `APP_PASSWORD` | Login password | `CRMCPATIENTS` |
-
 ## Tech Stack
 
 - **Backend**: Flask (Python)
