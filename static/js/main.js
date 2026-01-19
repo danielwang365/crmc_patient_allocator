@@ -611,7 +611,7 @@ function updateSummary() {
 
     const totalTraded = summary.team_a_traded + summary.team_b_traded + summary.team_n_traded;
     const totalCensus = summary.team_a_total + summary.team_b_total + summary.team_n_total + totalTraded;
-    const totalGained = summary.team_a_gained + summary.team_b_gained + summary.team_n_gained + totalTraded;
+    const totalGained = summary.team_a_gained + summary.team_b_gained + summary.team_n_gained;
 
     currentSummary = summary;
 
@@ -624,12 +624,12 @@ function updateSummary() {
     setVal('teamATotalPatients', summary.team_a_total);
     setVal('teamAGained', summary.team_a_gained);
     setVal('teamAStepDown', summary.team_a_stepdown);
-    setVal('teamAGainedTraded', summary.team_a_gained + summary.team_b_traded);
+    setVal('teamAGainedTraded', summary.team_a_gained + summary.team_a_traded);
 
     setVal('teamBTotalPatients', summary.team_b_total);
     setVal('teamBGained', summary.team_b_gained);
     setVal('teamBStepDown', summary.team_b_stepdown);
-    setVal('teamBGainedTraded', summary.team_b_gained + summary.team_a_traded);
+    setVal('teamBGainedTraded', summary.team_b_gained + summary.team_b_traded);
 
     setVal('teamNTotalPatients', summary.team_n_total);
     setVal('teamNGained', summary.team_n_gained);
@@ -751,6 +751,7 @@ async function openPrintPreview() {
                         <th>StepDown</th>
                         <th>New SD</th>
                         <th>New Patients</th>
+                        <th>Gained+Traded</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -770,9 +771,9 @@ async function openPrintPreview() {
 function generateTeamRows(team, data) {
     if (data.length === 0) return '';
 
-    let html = `<tr class="team-header"><td colspan="6">Team ${team}</td></tr>`;
+    let html = `<tr class="team-header"><td colspan="7">Team ${team}</td></tr>`;
 
-    let totalStart = 0, totalPatients = 0, totalSD = 0, totalNewSD = 0, totalNew = 0;
+    let totalStart = 0, totalPatients = 0, totalSD = 0, totalNewSD = 0, totalNew = 0, totalTraded = 0;
 
     data.forEach(r => {
         totalStart += r.original_total_patients || 0;
@@ -780,15 +781,17 @@ function generateTeamRows(team, data) {
         totalSD += r.step_down_patients || 0;
         totalNewSD += r.gained_step_down || 0;
         totalNew += r.gained || 0;
+        totalTraded += r.traded_patients || 0;
 
         html += `
             <tr>
-                <td>${r.name}</td>
+                <td>${r.name}${r.is_new ? '*' : ''}</td>
                 <td>${r.original_total_patients || 0}</td>
                 <td>${r.total_patients || 0}</td>
                 <td>${r.step_down_patients || 0}</td>
                 <td>${r.gained_step_down || 0}</td>
                 <td>${r.gained || 0}</td>
+                <td>${r.gained || 0}+${r.traded_patients || 0}</td>
             </tr>
         `;
     });
@@ -801,6 +804,7 @@ function generateTeamRows(team, data) {
             <td>${totalSD}</td>
             <td>${totalNewSD}</td>
             <td>${totalNew}</td>
+            <td>${totalNew}+${totalTraded}</td>
         </tr>
     `;
 
@@ -808,7 +812,7 @@ function generateTeamRows(team, data) {
 }
 
 function generateGrandTotal(data) {
-    let totalStart = 0, totalPatients = 0, totalSD = 0, totalNewSD = 0, totalNew = 0;
+    let totalStart = 0, totalPatients = 0, totalSD = 0, totalNewSD = 0, totalNew = 0, totalTraded = 0;
 
     data.forEach(r => {
         totalStart += r.original_total_patients || 0;
@@ -816,6 +820,7 @@ function generateGrandTotal(data) {
         totalSD += r.step_down_patients || 0;
         totalNewSD += r.gained_step_down || 0;
         totalNew += r.gained || 0;
+        totalTraded += r.traded_patients || 0;
     });
 
     return `
@@ -826,6 +831,7 @@ function generateGrandTotal(data) {
             <td>${totalSD}</td>
             <td>${totalNewSD}</td>
             <td>${totalNew}</td>
+            <td>${totalNew}+${totalTraded}</td>
         </tr>
     `;
 }

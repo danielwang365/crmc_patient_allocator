@@ -218,27 +218,26 @@
                     <th class="numeric">Original</th>
                     <th class="numeric">Total</th>
                     <th class="numeric">Step-Down</th>
-                    <th class="numeric">Out of Floor</th>
                     <th class="numeric">Traded</th>
                     <th class="numeric">Gained</th>
                     <th class="numeric">Gained SD</th>
+                    <th class="numeric">Gained+Traded</th>
                 </tr>
             </thead>
             <tbody>
                 {% for physician in team_physicians %}
                 <tr{% if physician.is_new %} class="highlight"{% endif %}>
                     <td>
-                        {{ physician.name }}
-                        {% if physician.is_new %}<span class="new-badge">NEW</span>{% endif %}
+                        {{ physician.name }}{% if physician.is_new %}*{% endif %}
                         {% if physician.is_buffer %}<span class="buffer-badge">BUFFER</span>{% endif %}
                     </td>
                     <td class="numeric">{{ physician.original_total_patients }}</td>
                     <td class="numeric">{{ physician.total_patients }}</td>
                     <td class="numeric">{{ physician.step_down_patients }}</td>
-                    <td class="numeric">{{ physician.transferred_patients }}</td>
                     <td class="numeric">{{ physician.traded_patients }}</td>
                     <td class="numeric">{{ physician.gained }}</td>
                     <td class="numeric">{{ physician.gained_step_down }}</td>
+                    <td class="numeric">{{ physician.gained }}+{{ physician.traded_patients }}</td>
                 </tr>
                 {% endfor %}
                 <tr class="team-totals">
@@ -246,10 +245,10 @@
                     <td class="numeric">{{ team_physicians | sum(attribute='original_total_patients') }}</td>
                     <td class="numeric">{{ team_physicians | sum(attribute='total_patients') }}</td>
                     <td class="numeric">{{ team_physicians | sum(attribute='step_down_patients') }}</td>
-                    <td class="numeric">{{ team_physicians | sum(attribute='transferred_patients') }}</td>
                     <td class="numeric">{{ team_physicians | sum(attribute='traded_patients') }}</td>
                     <td class="numeric">{{ team_physicians | sum(attribute='gained') }}</td>
                     <td class="numeric">{{ team_physicians | sum(attribute='gained_step_down') }}</td>
+                    <td class="numeric">{{ team_physicians | sum(attribute='gained') }}+{{ team_physicians | sum(attribute='traded_patients') }}</td>
                 </tr>
             </tbody>
         </table>

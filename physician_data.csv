@@ -1,3 +1,22 @@
-Yesterday,Physician Name,Team,New Physician,Buffer,Working,Total Patients,StepDown,Out of floor,Traded
-,Wang,A,False,False,True,0,0,0,0
-,Jaini,B,False,False,True,0,0,0,0
+Yesterday,Physician Name,Team,New Physician,Buffer,Working,Total Patients,StepDown,Traded
+,Abadi,A,False,False,True,14,3,0
+,Adhiakha,A,False,False,True,11,1,0
+,Batth,A,False,False,True,10,0,0
+,Bhogireddy,A,False,False,True,14,3,0
+,D'Souza,A,False,False,True,10,1,0
+,Mahajan,A,False,False,True,14,0,0
+,Oladipo,A,False,False,True,14,3,0
+,Wang,A,False,False,True,12,2,0
+,Zaidi,A,False,False,True,12,1,0
+,Attrapisi,B,False,False,True,10,2,0
+,Aung,B,False,False,True,14,2,0
+,Batlawala,B,False,False,True,10,1,0
+,Gupta,B,False,False,True,11,1,0
+,JemJem,B,False,False,True,10,1,0
+,Kaur,B,False,False,True,14,1,0
+,Narra,B,False,False,True,10,1,0
+,Perera,B,False,False,True,14,1,0
+,Shehata,B,False,False,True,12,2,0
+,Shirani,B,False,False,True,12,2,0
+,Souliman,B,False,False,True,14,2,0
+,Shwe,N,False,False,True,13,1,0
