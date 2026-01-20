@@ -88,14 +88,6 @@ const physicianColumnDefs = [
         valueParser: params => Number(params.newValue) || 0,
     },
     {
-        field: 'transferred_patients',
-        headerName: 'Out of floor',
-        editable: true,
-        width: 110,
-        type: 'numericColumn',
-        valueParser: params => Number(params.newValue) || 0,
-    },
-    {
         field: 'traded_patients',
         headerName: 'Traded',
         editable: true,
@@ -155,15 +147,6 @@ const resultsColumnDefs = [
     {
         field: 'step_down_patients',
         headerName: 'StepDown',
-        width: 100,
-        type: 'numericColumn',
-        editable: true,
-        valueParser: params => Number(params.newValue) || 0,
-        cellStyle: { backgroundColor: '#f0f9ff' },
-    },
-    {
-        field: 'transferred_patients',
-        headerName: 'Out of floor',
         width: 100,
         type: 'numericColumn',
         editable: true,
