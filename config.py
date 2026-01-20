@@ -42,7 +42,7 @@ DEFAULT_PARAMETERS = {
     "n_total_new_patients": 20,
     "n_A_new_patients": 10,
     "n_B_new_patients": 8,
-    "n_N_new_patients": 2,
+    "n_N_new_patients": 0,
     "n_step_down_patients": 0,
     "minimum_patients": 10,
     "maximum_patients": 20,

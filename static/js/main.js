@@ -85,7 +85,7 @@ async function loadParameters() {
         setVal('n_total_new_patients', params.n_total_new_patients || 20);
         setVal('n_A_new_patients', params.n_A_new_patients || 10);
         setVal('n_B_new_patients', params.n_B_new_patients || 8);
-        setVal('n_N_new_patients', params.n_N_new_patients || 2);
+        setVal('n_N_new_patients', params.n_N_new_patients ?? 0);
         setVal('n_step_down_patients', params.n_step_down_patients || 0);
         setVal('minimum_total', params.minimum_patients || 10);
         setVal('maximum_total', params.maximum_patients || 14);
@@ -286,6 +286,9 @@ function setupEventListeners() {
 
     // Delete physician button
     document.getElementById('deletePhysicianBtn')?.addEventListener('click', deleteSelectedPhysician);
+
+    // Clear numbers button
+    document.getElementById('clearNumbersBtn')?.addEventListener('click', clearPatientData);
 
     // Run allocation button
     document.getElementById('runAllocationBtn')?.addEventListener('click', runAllocation);
@@ -532,6 +535,27 @@ async function removeFromMasterList(name) {
     }
 }
 
+// Clear all patient numbers (keep doctor names and team assignments)
+async function clearPatientData() {
+    if (!confirm('Clear all patient numbers? Doctor names will be kept.')) return;
+
+    const rowData = [];
+    physicianGridApi.forEachNode(node => {
+        const data = node.data;
+        rowData.push({
+            ...data,
+            total_patients: 0,
+            step_down_patients: 0,
+            transferred_patients: 0,
+            traded_patients: 0
+        });
+    });
+
+    await API.bulkUpdatePhysicians(rowData);
+    physicianGridApi.setGridOption('rowData', rowData);
+    showSaveIndicator('Numbers cleared!');
+}
+
 // Run allocation
 async function runAllocation() {
     const physicians = [];
@@ -547,7 +571,7 @@ async function runAllocation() {
         n_total_new_patients: getVal('n_total_new_patients', 20),
         n_A_new_patients: getVal('n_A_new_patients', 10),
         n_B_new_patients: getVal('n_B_new_patients', 8),
-        n_N_new_patients: getVal('n_N_new_patients', 2),
+        n_N_new_patients: getVal('n_N_new_patients', 0),
         n_step_down_patients: getVal('n_step_down_patients', 0),
         minimum_patients: getVal('minimum_total', 10),
         maximum_patients: getVal('maximum_total', 14),
