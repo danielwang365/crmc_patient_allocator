@@ -839,3 +839,27 @@ body {
         grid-template-columns: 1fr;
     }
 }
+
+/* Shift Day Toggle */
+.shift-toggle {
+    font-weight: 600;
+    font-size: 14px;
+    letter-spacing: 0.03em;
+    transition: all 0.2s;
+}
+
+.shift-toggle[data-active="false"] {
+    background: var(--gray-100);
+    color: var(--gray-600);
+    border: 1px solid var(--gray-300);
+}
+
+.shift-toggle[data-active="true"] {
+    background: var(--success);
+    color: white;
+    border: 1px solid var(--success);
+}
+
+.shift-toggle[data-active="true"]:hover {
+    background: #059669;
+}

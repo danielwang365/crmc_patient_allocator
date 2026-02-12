@@ -297,6 +297,8 @@ def run_allocation():
             minimum_patients=parameters.get('minimum_patients', 10),
             n_step_down_patients=parameters.get('n_step_down_patients', 0),
             maximum_patients=parameters.get('maximum_patients', 20),
+            maximum_step_down=parameters.get('maximum_step_down', 1),
+            is_new_shift_day=parameters.get('is_new_shift_day', False),
         )
         # Result is a dict with 'results', 'summary', and 'remaining_pools'
         return jsonify({

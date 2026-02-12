@@ -11,6 +11,7 @@ let teamAssignments = {};
 let yesterdayPhysicians = [];
 let currentResults = null;
 let currentSummary = null;
+let isNewShiftDay = false;
 
 // Initialize the application
 document.addEventListener('DOMContentLoaded', async () => {
@@ -31,6 +32,9 @@ async function initializeApp() {
 
     // Setup event listeners
     setupEventListeners();
+
+    // Auto-detect Wednesday for New Shift Day
+    initNewShiftDay();
 
     // Render master list (after grid is populated)
     renderMasterList();
@@ -94,6 +98,25 @@ async function loadParameters() {
         setVal('non_new_start_number', params.non_new_start_number || 12);
         setVal('maximum_step_down', params.maximum_step_down || 4);
     }
+}
+
+// Initialize New Shift Day toggle
+function initNewShiftDay() {
+    const btn = document.getElementById('newShiftDayBtn');
+    if (!btn) return;
+
+    // Auto-detect Wednesday (day 3)
+    if (new Date().getDay() === 3) {
+        isNewShiftDay = true;
+        btn.dataset.active = 'true';
+        btn.textContent = 'YES';
+    }
+
+    btn.addEventListener('click', () => {
+        isNewShiftDay = !isNewShiftDay;
+        btn.dataset.active = isNewShiftDay ? 'true' : 'false';
+        btn.textContent = isNewShiftDay ? 'YES' : 'NO';
+    });
 }
 
 // Load physicians
@@ -592,6 +615,7 @@ async function runAllocation() {
         buffer_start_number: getVal('buffer_start_number', 12),
         non_new_start_number: getVal('non_new_start_number', 12),
         maximum_step_down: getVal('maximum_step_down', 4),
+        is_new_shift_day: isNewShiftDay,
     };
 
     const result = await API.runAllocation(physicians, parameters);
@@ -647,7 +671,7 @@ function updateSummary() {
     };
 
     const totalTraded = summary.team_a_traded + summary.team_b_traded + summary.team_n_traded;
-    const totalCensus = summary.team_a_total + summary.team_b_total + summary.team_n_total + totalTraded;
+    const totalCensus = summary.team_a_total + summary.team_b_total + summary.team_n_total;
     const totalGained = summary.team_a_gained + summary.team_b_gained + summary.team_n_gained;
 
     currentSummary = summary;
